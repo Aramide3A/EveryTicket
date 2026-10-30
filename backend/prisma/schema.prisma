@@ -1,0 +1,631 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Auth_user {
+  id            String              @id
+  name          String
+  email         String
+  emailVerified Boolean             @default(false)
+  image         String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  auth_sessions Auth_session[]
+  auth_accounts Auth_account[]
+  profile       ApplicationProfile?
+
+  @@unique([email])
+  @@map("auth_user")
+}
+
+model Auth_session {
+  id        String    @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  auth_user Auth_user @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("auth_session")
+}
+
+model Auth_account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  auth_user             Auth_user @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("auth_account")
+}
+
+model Auth_verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("auth_verification")
+}
+
+enum ApplicationRole {
+  CUSTOMER
+  ORGANIZER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  BLOCKED
+}
+
+model ApplicationProfile {
+  id                     String               @id @default(cuid())
+  userId                 String               @unique
+  role                   ApplicationRole      @default(CUSTOMER)
+  roles                  ApplicationRole[]    @default([CUSTOMER])
+  status                 AccountStatus        @default(ACTIVE)
+  blockedAt              DateTime?
+  blockedByProfileId     String?
+  blockReason            String?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  user                   Auth_user            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events                 Event[]
+  feeRulesChanged        PlatformFeeRule[]    @relation("PlatformFeeRuleChangedBy")
+  orders                 Order[]
+  checkIns               CheckIn[]
+  refundRequestsCreated  RefundRequest[]      @relation("RefundRequestedBy")
+  refundRequestsReviewed RefundRequest[]      @relation("RefundReviewedBy")
+  payoutRequestsCreated  PayoutRequest[]      @relation("PayoutRequestedBy")
+  payoutRequestsReviewed PayoutRequest[]      @relation("PayoutReviewedBy")
+  auditLogs              AuditLog[]           @relation("AuditActor")
+  blockedBy              ApplicationProfile?  @relation("ProfileBlockedBy", fields: [blockedByProfileId], references: [id], onDelete: Restrict)
+  blockedProfiles        ApplicationProfile[] @relation("ProfileBlockedBy")
+
+  @@index([blockedByProfileId])
+  @@map("application_profile")
+}
+
+enum EventState {
+  DRAFT
+  PUBLISHED
+  SUSPENDED
+  CANCELLED
+}
+
+enum PlatformFeeMode {
+  PERCENTAGE
+  FIXED
+}
+
+enum EventMediaStatus {
+  PENDING
+  READY
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  FAILED
+  CANCELLED
+  EXPIRED
+  PAID_NEEDS_RESOLUTION
+}
+
+enum TicketStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum PaymentAttemptStatus {
+  INITIALIZED
+  VERIFIED_SUCCESS
+  VERIFIED_FAILED
+}
+
+enum NotificationJobStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+enum NotificationJobType {
+  ORDER_CONFIRMATION
+  RSVP_CONFIRMATION
+  REFUND_DECISION
+  PAYOUT_DECISION
+}
+
+enum TicketDocumentStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum GuestResponseStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum CredentialStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum RefundRequestStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PROCESSING
+  PROCESSED
+  FAILED
+  CANCELLED
+}
+
+enum PayoutRequestStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PAID
+  CANCELLED
+}
+
+model EventCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  events    Event[]
+
+  @@map("event_category")
+}
+
+model Event {
+  id                 String             @id @default(cuid())
+  organizerProfileId String
+  categoryId         String
+  title              String
+  slug               String             @unique
+  description        String
+  city               String
+  state              String
+  venue              String
+  address            String
+  timeZone           String
+  startAt            DateTime
+  endAt              DateTime
+  status             EventState         @default(DRAFT)
+  featured           Boolean            @default(false)
+  publishedAt        DateTime?
+  suspendedAt        DateTime?
+  suspendedReason    String?
+  cancelledAt        DateTime?
+  cancelledReason    String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  organizer          ApplicationProfile @relation(fields: [organizerProfileId], references: [id], onDelete: Restrict)
+  category           EventCategory      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  ticketTypes        TicketType[]
+  tickets            Ticket[]
+  orders             Order[]
+  guestLists         GuestList[]
+  checkIns           CheckIn[]
+  refundRequests     RefundRequest[]
+  payoutRequests     PayoutRequest[]
+  media              EventMedia[]
+
+  @@index([organizerProfileId, status])
+  @@index([startAt])
+  @@index([city, state])
+  @@map("event")
+}
+
+model EventMedia {
+  id            String           @id @default(cuid())
+  eventId       String
+  objectKey     String           @unique
+  publicUrl     String
+  contentType   String
+  contentLength Int
+  status        EventMediaStatus @default(PENDING)
+  expiresAt     DateTime
+  completedAt   DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  event         Event            @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@index([eventId, status])
+  @@index([status, expiresAt])
+  @@map("event_media")
+}
+
+model TicketType {
+  id           String          @id @default(cuid())
+  eventId      String
+  name         String
+  description  String?
+  priceKobo    Int
+  capacity     Int
+  salesStartAt DateTime?
+  salesEndAt   DateTime?
+  isActive     Boolean         @default(true)
+  maxPerOrder  Int?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  event        Event           @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  orderLines   OrderLine[]
+  holds        InventoryHold[]
+  tickets      Ticket[]
+
+  @@unique([eventId, name])
+  @@index([eventId, isActive])
+  @@map("ticket_type")
+}
+
+model PlatformFeeRule {
+  id                    String              @id @default(cuid())
+  version               Int                 @unique
+  mode                  PlatformFeeMode
+  percentageBasisPoints Int?
+  fixedAmountKobo       Int?
+  appliesToFreeOrder    Boolean             @default(false)
+  activeFrom            DateTime
+  activeUntil           DateTime?
+  changedByProfileId    String?
+  createdAt             DateTime            @default(now())
+  changedBy             ApplicationProfile? @relation("PlatformFeeRuleChangedBy", fields: [changedByProfileId], references: [id], onDelete: Restrict)
+  orders                Order[]
+
+  @@index([activeFrom, activeUntil])
+  @@map("platform_fee_rule")
+}
+
+model Order {
+  id                               String              @id @default(cuid())
+  reference                        String              @unique
+  eventId                          String
+  customerProfileId                String?
+  buyerName                        String
+  buyerEmail                       String
+  buyerPhone                       String?
+  currency                         String              @default("NGN")
+  ticketSubtotalKobo               Int
+  platformFeeKobo                  Int
+  totalKobo                        Int
+  platformFeeRuleId                String
+  platformFeeRuleVersion           Int
+  platformFeeMode                  PlatformFeeMode
+  platformFeePercentageBasisPoints Int?
+  platformFeeFixedAmountKobo       Int?
+  status                           OrderStatus         @default(PENDING_PAYMENT)
+  holdExpiresAt                    DateTime
+  createdAt                        DateTime            @default(now())
+  paidAt                           DateTime?
+  event                            Event               @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  customerProfile                  ApplicationProfile? @relation(fields: [customerProfileId], references: [id], onDelete: Restrict)
+  platformFeeRule                  PlatformFeeRule     @relation(fields: [platformFeeRuleId], references: [id], onDelete: Restrict)
+  holds                            InventoryHold[]
+  lines                            OrderLine[]
+  tickets                          Ticket[]
+  paymentAttempts                  PaymentAttempt[]
+  notificationJobs                 NotificationJob[]
+  refundRequests                   RefundRequest[]
+
+  @@index([eventId, status])
+  @@index([customerProfileId, createdAt])
+  @@map("order")
+}
+
+model OrderLine {
+  id             String     @id @default(cuid())
+  orderId        String
+  ticketTypeId   String
+  ticketTypeName String
+  unitPriceKobo  Int
+  quantity       Int
+  createdAt      DateTime   @default(now())
+  order          Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  ticketType     TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([ticketTypeId])
+  @@map("order_line")
+}
+
+model InventoryHold {
+  id           String     @id @default(cuid())
+  orderId      String
+  ticketTypeId String
+  quantity     Int
+  expiresAt    DateTime
+  createdAt    DateTime   @default(now())
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  ticketType   TicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, ticketTypeId])
+  @@index([ticketTypeId, expiresAt])
+  @@index([orderId])
+  @@map("inventory_hold")
+}
+
+model Ticket {
+  id                   String                @id @default(cuid())
+  orderId              String
+  eventId              String
+  ticketTypeId         String
+  holderName           String
+  holderEmail          String
+  ticketTypeName       String
+  priceKobo            Int
+  admissionTokenDigest String                @unique
+  status               TicketStatus          @default(ACTIVE)
+  issuedAt             DateTime              @default(now())
+  documentJob          TicketDocumentJob?
+  checkIn              CheckIn?
+  refundRequestTickets RefundRequestTicket[]
+  order                Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  event                Event                 @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  ticketType           TicketType            @relation(fields: [ticketTypeId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([eventId, status])
+  @@map("ticket")
+}
+
+model TicketDocumentJob {
+  id            String               @id @default(cuid())
+  ticketId      String               @unique
+  objectKey     String               @unique
+  status        TicketDocumentStatus @default(PENDING)
+  attempts      Int                  @default(0)
+  nextAttemptAt DateTime?
+  failureDetail String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  ticket        Ticket               @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([status, nextAttemptAt])
+  @@map("ticket_document_job")
+}
+
+model GuestList {
+  id           String          @id @default(cuid())
+  eventId      String
+  name         String
+  isEnabled    Boolean         @default(true)
+  expiresAt    DateTime?
+  maxResponses Int?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  event        Event           @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  categories   GuestCategory[]
+  links        RsvpLink[]
+  guests       Guest[]
+
+  @@index([eventId, isEnabled])
+  @@map("guest_list")
+}
+
+model GuestCategory {
+  id           String     @id @default(cuid())
+  guestListId  String
+  name         String
+  isRestricted Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  guestList    GuestList  @relation(fields: [guestListId], references: [id], onDelete: Restrict)
+  guests       Guest[]
+  links        RsvpLink[]
+
+  @@unique([guestListId, name])
+  @@map("guest_category")
+}
+
+model RsvpLink {
+  id           String         @id @default(cuid())
+  guestListId  String
+  tokenDigest  String         @unique
+  categoryId   String?
+  expiresAt    DateTime?
+  maxResponses Int?
+  revokedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  guestList    GuestList      @relation(fields: [guestListId], references: [id], onDelete: Restrict)
+  category     GuestCategory? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  guests       Guest[]
+
+  @@index([guestListId])
+  @@map("rsvp_link")
+}
+
+model Guest {
+  id                   String              @id @default(cuid())
+  guestListId          String
+  rsvpLinkId           String?
+  categoryId           String?
+  name                 String
+  email                String
+  responseStatus       GuestResponseStatus @default(PENDING)
+  credentialStatus     CredentialStatus    @default(ACTIVE)
+  admissionTokenDigest String?             @unique
+  idempotencyKey       String?             @unique
+  respondedAt          DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  guestList            GuestList           @relation(fields: [guestListId], references: [id], onDelete: Restrict)
+  rsvpLink             RsvpLink?           @relation(fields: [rsvpLinkId], references: [id], onDelete: Restrict)
+  category             GuestCategory?      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  checkIn              CheckIn?
+
+  @@index([guestListId, responseStatus])
+  @@map("guest")
+}
+
+model CheckIn {
+  id                   String             @id @default(cuid())
+  eventId              String
+  ticketId             String?            @unique
+  guestId              String?            @unique
+  checkedInByProfileId String
+  checkedInAt          DateTime           @default(now())
+  event                Event              @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  ticket               Ticket?            @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+  guest                Guest?             @relation(fields: [guestId], references: [id], onDelete: Restrict)
+  checkedInBy          ApplicationProfile @relation(fields: [checkedInByProfileId], references: [id], onDelete: Restrict)
+
+  @@index([eventId, checkedInAt])
+  @@map("check_in")
+}
+
+model PaymentAttempt {
+  id                   String               @id @default(cuid())
+  orderId              String
+  reference            String               @unique
+  expectedAmountKobo   Int
+  currency             String
+  gatewayTransactionId String?              @unique
+  status               PaymentAttemptStatus @default(INITIALIZED)
+  failureDetail        String?
+  initializedAt        DateTime?
+  verifiedAt           DateTime?
+  createdAt            DateTime             @default(now())
+  order                Order                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, status])
+  @@map("payment_attempt")
+}
+
+model NotificationJob {
+  id             String                @id @default(cuid())
+  orderId        String?
+  type           NotificationJobType
+  recipientEmail String
+  idempotencyKey String                @unique
+  status         NotificationJobStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  failureDetail  String?
+  sentAt         DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  order          Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@index([orderId])
+  @@map("notification_job")
+}
+
+model RefundRequest {
+  id                     String                @id @default(cuid())
+  organizerProfileId     String
+  eventId                String
+  orderId                String
+  ticketRefundKobo       Int
+  platformFeeRefundKobo  Int
+  totalRefundKobo        Int
+  reason                 String
+  status                 RefundRequestStatus   @default(REQUESTED)
+  requestedAt            DateTime              @default(now())
+  reviewedByProfileId    String?
+  reviewedAt             DateTime?
+  reviewReason           String?
+  gatewayRefundReference String?
+  gatewayStatus          String?
+  processedAt            DateTime?
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+  organizer              ApplicationProfile    @relation("RefundRequestedBy", fields: [organizerProfileId], references: [id], onDelete: Restrict)
+  reviewer               ApplicationProfile?   @relation("RefundReviewedBy", fields: [reviewedByProfileId], references: [id], onDelete: Restrict)
+  event                  Event                 @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  order                  Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  tickets                RefundRequestTicket[]
+
+  @@index([organizerProfileId, requestedAt])
+  @@index([eventId, status])
+  @@index([orderId, status])
+  @@map("refund_request")
+}
+
+model RefundRequestTicket {
+  refundRequestId String
+  ticketId        String
+  refundRequest   RefundRequest @relation(fields: [refundRequestId], references: [id], onDelete: Restrict)
+  ticket          Ticket        @relation(fields: [ticketId], references: [id], onDelete: Restrict)
+
+  @@id([refundRequestId, ticketId])
+  @@index([ticketId])
+  @@map("refund_request_ticket")
+}
+
+model PayoutRequest {
+  id                    String              @id @default(cuid())
+  organizerProfileId    String
+  eventId               String
+  ticketSubtotalKobo    Int
+  reservedRefundKobo    Int
+  priorPaidKobo         Int
+  requestedAmountKobo   Int
+  calculatedPayableKobo Int
+  status                PayoutRequestStatus @default(REQUESTED)
+  requestedAt           DateTime            @default(now())
+  reviewedByProfileId   String?
+  reviewedAt            DateTime?
+  reviewReason          String?
+  transferReference     String?
+  transferDate          DateTime?
+  paidAt                DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  organizer             ApplicationProfile  @relation("PayoutRequestedBy", fields: [organizerProfileId], references: [id], onDelete: Restrict)
+  reviewer              ApplicationProfile? @relation("PayoutReviewedBy", fields: [reviewedByProfileId], references: [id], onDelete: Restrict)
+  event                 Event               @relation(fields: [eventId], references: [id], onDelete: Restrict)
+
+  @@index([organizerProfileId, requestedAt])
+  @@index([eventId, status])
+  @@map("payout_request")
+}
+
+model AuditLog {
+  id             String              @id @default(cuid())
+  actorProfileId String?
+  action         String
+  targetType     String
+  targetId       String
+  details        Json?
+  createdAt      DateTime            @default(now())
+  actor          ApplicationProfile? @relation("AuditActor", fields: [actorProfileId], references: [id], onDelete: Restrict)
+
+  @@index([targetType, targetId, createdAt])
+  @@index([actorProfileId, createdAt])
+  @@map("audit_log")
+}

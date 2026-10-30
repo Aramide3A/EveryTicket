@@ -1,0 +1,22 @@
+[Unit]
+Description=EverythingTicket NestJS API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=everythingticket
+Group=everythingticket
+WorkingDirectory=/opt/everythingticket/backend
+EnvironmentFile=/etc/everythingticket/api.env
+ExecStart=/usr/bin/node /opt/everythingticket/backend/dist/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/everythingticket/backend
+
+[Install]
+WantedBy=multi-user.target
