@@ -2,6 +2,10 @@
 
 Run this against test-mode Paystack, a staging PostgreSQL database, staging encrypted Redis, staging SMTP, and separate staging R2 buckets before production access is granted.
 
+- Register an organizer through `/api/v1/organizer-registration`, verify the SMTP-delivered email, confirm the resulting session can create an organizer event, and confirm the same email cannot register twice.
+- Complete a paid guest checkout, return using the order reference, retry payment initialization once, reconcile the payment, and verify that order status changes without exposing buyer or ticket data.
+- Register a customer with the guest checkout email. Confirm no historical order is visible before email verification and that the paid order/tickets appear immediately after verification.
+
 ## Evidence record
 
 Complete this record in the release ticket; do not mark staging accepted from a local test run.

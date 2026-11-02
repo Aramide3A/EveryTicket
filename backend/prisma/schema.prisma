@@ -343,6 +343,7 @@ model Order {
 
   @@index([eventId, status])
   @@index([customerProfileId, createdAt])
+  @@index([buyerEmail, customerProfileId])
   @@map("order")
 }
 

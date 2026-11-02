@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
 import { withDatabase } from '../persistence/database-operation.js';
 import { PaymentProcessingService } from './payment-processing.service.js';
+import { findLatestInitializedPaymentReference } from './order-payment-access.js';
 
 @ApiTags('Payments')
 @ApiBearerAuth('session')
@@ -29,24 +30,16 @@ export class PaymentReconciliationController {
 }
 
 @ApiTags('Payments')
-@ApiBearerAuth('session')
 @Controller('orders')
 export class OrderPaymentReconciliationController {
   constructor(private readonly paymentProcessing: PaymentProcessingService) {}
 
   @Post(':orderReference/reconcile')
-  @ApiOperation({ summary: 'Reconcile the latest payment attempt for an owned order' })
-  async reconcile(@Req() request: Request, @Param('orderReference') orderReference: string) {
-    const profile = await requireActiveProfile(request, 'CUSTOMER');
+  @ApiOperation({ summary: 'Reconcile the latest payment attempt for a guest or customer order reference' })
+  async reconcile(@Param('orderReference') orderReference: string) {
     const paymentReference = await withDatabase({
       unavailableMessage: 'payments are not configured',
-      callback: async (database) => {
-        const order = await database.order.findFirst({
-          where: { reference: orderReference, customerProfileId: profile.id },
-          select: { paymentAttempts: { where: { status: 'INITIALIZED' }, orderBy: { createdAt: 'desc' }, take: 1, select: { reference: true } } },
-        });
-        return order?.paymentAttempts[0]?.reference ?? null;
-      },
+      callback: (database) => findLatestInitializedPaymentReference({ database, orderReference }),
     });
     if (!paymentReference) throw new NotFoundException('pending payment was not found');
     return this.paymentProcessing.process(paymentReference);

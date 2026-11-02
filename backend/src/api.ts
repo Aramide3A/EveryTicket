@@ -61,6 +61,7 @@ export async function createApi(
     .addTag('Checkout', 'Server-authoritative checkout and order status')
     .addTag('Payments', 'Paystack payment initialization and reconciliation')
     .addTag('Events', 'Public event discovery and organizer event management')
+    .addTag('Organizer registration', 'Public organizer account registration and email verification')
     .addTag('Organizer operations', 'Organizer dashboards, attendees, media, refunds, and payouts')
     .addTag('RSVP and admission', 'RSVP guest management and authenticated gate admission')
     .addTag('Administration', 'Administrator controls, platform fees, refunds, and payouts')
@@ -74,11 +75,12 @@ export async function createApi(
   return app;
 }
 
-function sensitiveAction(request: Request): string | null {
+export function sensitiveAction(request: Pick<Request, 'method' | 'url'>): string | null {
   if (request.method !== 'POST') return null;
   if (request.url.startsWith('/api/auth/')) return 'authentication';
+  if (request.url === '/api/v1/organizer-registration') return 'authentication';
   if (request.url.startsWith('/api/v1/rsvp/')) return 'rsvp-submission';
-  if (request.url.startsWith('/api/v1/orders/')) return 'checkout';
+  if (request.url === '/api/v1/orders' || request.url.startsWith('/api/v1/orders/')) return 'checkout';
   if (request.url.startsWith('/api/v1/payments/')) return 'payment-reconciliation';
   return null;
 }

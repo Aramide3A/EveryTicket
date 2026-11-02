@@ -17,13 +17,15 @@ describe('authenticated organizer operations HTTP contract', () => {
     client = createDatabaseClient(databaseUrl);
     await client.$connect();
     ids.email = `${randomUUID()}@example.test`;
-    const registration = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/api/auth/sign-up/email')
       .send({ name: 'Organizer', email: ids.email, password: 'password1234' })
       .expect(200);
-    const setCookie = registration.headers['set-cookie'];
-    cookie = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    await client.$executeRaw`UPDATE auth_user SET "emailVerified" = true WHERE email = ${ids.email}`;
     await client.$executeRaw`UPDATE application_profile SET role = 'ORGANIZER' WHERE "userId" = (SELECT id FROM auth_user WHERE email = ${ids.email})`;
+    const signIn = await request(app.getHttpServer()).post('/api/auth/sign-in/email').send({ email: ids.email, password: 'password1234' }).expect(200);
+    const setCookie = signIn.headers['set-cookie'];
+    cookie = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
     ids.categoryId = randomUUID();
     ids.eventId = randomUUID();
     await client.$executeRaw`INSERT INTO event_category (id, name, slug, "createdAt", "updatedAt") VALUES (${ids.categoryId}, 'Organizer operations', ${`organizer-operations-${ids.categoryId}`}, NOW(), NOW())`;

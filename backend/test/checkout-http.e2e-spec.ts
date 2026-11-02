@@ -13,12 +13,12 @@ describe('checkout HTTP contract', () => {
     await app.close();
   });
 
-  it('requires an authenticated customer before accepting checkout input', async () => {
+  it('accepts guest checkout input without an authenticated customer session', async () => {
     await request(app.getHttpServer()).post('/orders').send({
       eventId: 'event-id',
       reference: 'order-reference',
       buyer: { name: 'Buyer', email: 'buyer@example.test' },
       items: [{ ticketTypeId: 'ticket-type-id', quantity: 1 }],
-    }).expect(401);
+    }).expect((response) => expect(response.status).not.toBe(401));
   });
 });

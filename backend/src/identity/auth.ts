@@ -2,6 +2,8 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { createDatabaseClient } from '../persistence/prisma-client.js';
+import { createSmtpEmailSender } from '../worker/smtp-email-sender.js';
+import { linkGuestOrdersForVerifiedUser } from './guest-order-link.js';
 
 type AuthOptions = {
   baseUrl: string;
@@ -9,6 +11,8 @@ type AuthOptions = {
   databaseUrl: string;
   secret: string;
   trustedOrigins?: string[];
+  requireEmailVerification?: boolean;
+  sendVerificationEmail?: (input: { user: { email: string }; url: string }) => Promise<void>;
 };
 
 export function createAuth({
@@ -16,7 +20,9 @@ export function createAuth({
   databaseClient,
   databaseUrl,
   secret,
-  trustedOrigins
+  trustedOrigins,
+  requireEmailVerification = false,
+  sendVerificationEmail,
 }: AuthOptions) {
   const database = databaseClient ?? createDatabaseClient(databaseUrl);
 
@@ -29,7 +35,16 @@ export function createAuth({
       provider: 'postgresql'
     }),
     emailAndPassword: {
-      enabled: true
+      enabled: true,
+      requireEmailVerification,
+    },
+    emailVerification: {
+      sendOnSignUp: requireEmailVerification,
+      autoSignInAfterVerification: true,
+      sendVerificationEmail,
+      afterEmailVerification: async (user) => {
+        await linkGuestOrdersForVerifiedUser({ database, user });
+      },
     },
     user: { modelName: 'auth_user' },
     session: { modelName: 'auth_session' },
@@ -39,9 +54,10 @@ export function createAuth({
       user: {
         create: {
           after: async (user) => {
-            await database.applicationProfile.create({
+            const profile = await database.applicationProfile.create({
               data: { userId: user.id }
             });
+            await linkGuestOrdersForVerifiedUser({ database, user, profileId: profile.id });
           }
         }
       }
@@ -63,12 +79,35 @@ if (!databaseUrl || !secret) {
 
 export const authDatabase = createDatabaseClient(databaseUrl);
 
+const emailVerificationEnabled = process.env.NODE_ENV !== 'test';
+const verificationEmailSender = emailVerificationEnabled ? createSmtpEmailSender({
+  config: {
+    host: requiredEnvironment('SMTP_HOST'),
+    port: Number(process.env.SMTP_PORT ?? '587'),
+    user: requiredEnvironment('SMTP_USER'),
+    password: requiredEnvironment('SMTP_PASSWORD'),
+    from: requiredEnvironment('EMAIL_FROM'),
+  },
+}) : undefined;
+
 export const auth = createAuth({
   databaseUrl,
   databaseClient: authDatabase,
   secret,
   baseUrl: process.env.BETTER_AUTH_URL ?? 'http://localhost:3000',
+  requireEmailVerification: emailVerificationEnabled,
+  sendVerificationEmail: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
+    to: user.email,
+    subject: 'Verify your EverythingTicket email',
+    text: `Verify your email address to access your EverythingTicket account: ${url}`,
+  }) : undefined,
   trustedOrigins: process.env.PUBLIC_APP_URL
     ? [process.env.PUBLIC_APP_URL]
     : undefined
 });
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} must be set`);
+  return value;
+}

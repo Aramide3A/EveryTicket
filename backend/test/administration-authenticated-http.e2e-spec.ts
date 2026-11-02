@@ -17,13 +17,15 @@ describe('authenticated administration HTTP contract', () => {
     client = createDatabaseClient(databaseUrl);
     await client.$connect();
     email = `${randomUUID()}@example.test`;
-    const registration = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/api/auth/sign-up/email')
       .send({ name: 'Administrator', email, password: 'password1234' })
       .expect(200);
-    const setCookie = registration.headers['set-cookie'];
-    cookie = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
+    await client.$executeRaw`UPDATE auth_user SET "emailVerified" = true WHERE email = ${email}`;
     await client.$executeRaw`UPDATE application_profile SET role = 'ADMIN' WHERE "userId" = (SELECT id FROM auth_user WHERE email = ${email})`;
+    const signIn = await request(app.getHttpServer()).post('/api/auth/sign-in/email').send({ email, password: 'password1234' }).expect(200);
+    const setCookie = signIn.headers['set-cookie'];
+    cookie = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
   });
 
   afterEach(async () => {

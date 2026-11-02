@@ -25,16 +25,16 @@ describe('customer ticket HTTP access', () => {
     await request(app.getHttpServer()).post('/customer/orders/known-order/resend-confirmation').expect(401);
   });
 
-  it('protects the documented versioned account and checkout contracts', async () => {
+  it('protects account data while keeping guest checkout and callback status public', async () => {
     const api = app.getHttpServer();
 
     await request(api).get('/api/v1/account/me').expect(401);
     await request(api).get('/api/v1/account/orders/known-order').expect(401);
     await request(api).get('/api/v1/account/tickets').expect(401);
     await request(api).get('/api/v1/account/tickets/known-ticket/download').expect(401);
-    await request(api).post('/api/v1/orders/quote').send({}).expect(401);
-    await request(api).get('/api/v1/orders/known-order/status').expect(401);
-    await request(api).post('/api/v1/orders/known-order/reconcile').expect(401);
+    await request(api).post('/api/v1/orders/quote').send({}).expect(400);
+    await request(api).get('/api/v1/orders/known-order/status').expect(503);
+    await request(api).post('/api/v1/orders/known-order/reconcile').expect(503);
   });
 
   it('rate limits repeated public RSVP submissions', async () => {

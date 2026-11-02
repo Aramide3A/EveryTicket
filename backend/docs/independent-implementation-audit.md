@@ -7,7 +7,7 @@
 ## Changes made during this audit
 
 1. Checkout now rejects an event at or after its `startAt`, even if a ticket type has no `salesEndAt`. This prevents sales of already-started events. The regression test is in `test/checkout-quote.spec.ts`.
-2. `POST /orders/:orderReference/payments` now requires an active customer session and checks that the order belongs to that customer before it creates a Paystack payment attempt. This prevents a caller who knows an order reference from creating a payment authorization URL for another customer.
+2. `POST /orders/:orderReference/payments` is a rate-limited guest recovery route keyed by the server-generated high-entropy order reference. It creates a fresh Paystack attempt without exposing order contents; account orders and tickets remain session-scoped.
 3. The versioned `/api/v1` API, account profile/order/ticket/download routes, quote/status/reconciliation routes, checkout payment hand-off, public catalogue filters/availability, request limits, multi-role profiles, and OpenAPI grouping/body contracts are implemented.
 4. `PATCH /organizer/guest-lists/:guestListId/guests` is now supported alongside the existing guest-ID route. The collection-style contract takes `guestId` in the body and rejects a guest that is not in the specified, organizer-owned list.
 5. `POST /organizer/events/:eventId/media/complete` is now supported alongside the existing media-ID-in-path route. Its body supplies `mediaId`, preserving organizer and event ownership validation.

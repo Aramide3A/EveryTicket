@@ -1,0 +1,139 @@
+{
+  "info": {
+    "_postman_id": "ca93d2b7-478c-454d-8c0e-9bafc8f5612f",
+    "name": "EverythingTicket API",
+    "description": "Importable Postman Collection v2.1 for all canonical EverythingTicket endpoints. Application routes use /api/v1; Better Auth routes are deliberately mounted at /api/auth. Protected routes require a Better Auth session cookie. Sign in first using the Authentication folder, or set sessionToken manually.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key":"baseUrl","value":"http://localhost:3000"},
+    {"key":"apiBaseUrl","value":"{{baseUrl}}/api/v1"},
+    {"key":"sessionToken","value":""},
+    {"key":"eventId","value":"replace-with-event-id"},
+    {"key":"eventSlug","value":"sample-event"},
+    {"key":"ticketTypeId","value":"replace-with-ticket-type-id"},
+    {"key":"ticketId","value":"replace-with-ticket-id"},
+    {"key":"orderId","value":"replace-with-order-id"},
+    {"key":"orderReference","value":"replace-with-order-reference"},
+    {"key":"paymentReference","value":"replace-with-payment-reference"},
+    {"key":"guestListId","value":"replace-with-guest-list-id"},
+    {"key":"guestId","value":"replace-with-guest-id"},
+    {"key":"rsvpToken","value":"replace-with-rsvp-token"},
+    {"key":"mediaId","value":"replace-with-media-id"},
+    {"key":"refundRequestId","value":"replace-with-refund-request-id"},
+    {"key":"payoutRequestId","value":"replace-with-payout-request-id"},
+    {"key":"profileId","value":"replace-with-profile-id"},
+    {"key":"paystackSignature","value":"replace-with-hmac-sha512"}
+  ],
+  "event":[{"listen":"prerequest","script":{"type":"text/javascript","exec":["const token = pm.collectionVariables.get('sessionToken');","if (token && !pm.request.url.toString().includes('/webhooks/')) pm.request.headers.upsert({key: 'Cookie', value: `better-auth.session_token=${token}`});","if (pm.request.body && pm.request.body.mode === 'raw') pm.request.headers.upsert({key: 'Content-Type', value: 'application/json'});"]}}],
+  "item": [
+    {"name":"Documentation","item":[
+      {"name":"GET Versioned Swagger UI","request":{"method":"GET","url":"{{apiBaseUrl}}/docs"}},
+      {"name":"GET Legacy Swagger UI","request":{"method":"GET","url":"{{baseUrl}}/docs"}}
+    ]},
+    {"name":"Health","item":[
+      {"name":"GET Live","request":{"method":"GET","description":"Liveness check; no dependency check.","url":"{{apiBaseUrl}}/health/live"}},
+      {"name":"GET Ready","request":{"method":"GET","description":"Readiness check for PostgreSQL and Redis.","url":"{{apiBaseUrl}}/health/ready"}}
+    ]},
+    {"name":"Authentication (Better Auth)","description":"These endpoints are outside /api/v1. Sign-up sends email verification outside tests; verified users receive a session through verification or sign-in.","item":[
+      {"name":"POST Sign up email","request":{"method":"POST","description":"Creates a customer profile. Verification links matching historical guest orders before account ticket access is allowed.","url":"{{baseUrl}}/api/auth/sign-up/email","body":{"mode":"raw","raw":"{\"name\":\"Jane Doe\",\"email\":\"jane@example.com\",\"password\":\"replace-with-a-secure-password\"}"}}},
+      {"name":"POST Sign in email","request":{"method":"POST","url":"{{baseUrl}}/api/auth/sign-in/email","body":{"mode":"raw","raw":"{\"email\":\"jane@example.com\",\"password\":\"replace-with-a-secure-password\"}"}}},
+      {"name":"GET Current session","request":{"method":"GET","url":"{{baseUrl}}/api/auth/get-session"}},
+      {"name":"POST Sign out","request":{"method":"POST","url":"{{baseUrl}}/api/auth/sign-out"}}
+    ]},
+    {"name":"Organizer registration","description":"Public, rate-limited registration for the organizer site. It creates ORGANIZER access and sends Better Auth email verification; protected organizer operations become available after verification/sign-in.","item":[
+      {"name":"POST Register organizer","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer-registration","body":{"mode":"raw","raw":"{\"name\":\"Event Host\",\"email\":\"host@example.com\",\"password\":\"replace-with-a-secure-password\"}"}}}
+    ]},
+    {"name":"Public events","item":[
+      {"name":"GET Categories","request":{"method":"GET","url":"{{apiBaseUrl}}/categories"}},
+      {"name":"GET Published events","request":{"method":"GET","description":"Optional query: query, city, state, category, sort (upcoming|featured|popular), page.","url":"{{apiBaseUrl}}/events?query=music&city=Lagos&state=Lagos&category=music&sort=upcoming&page=1"}},
+      {"name":"GET Event by slug","request":{"method":"GET","url":"{{apiBaseUrl}}/events/{{eventSlug}}"}}
+    ]},
+    {"name":"Customer account","description":"Requires CUSTOMER role, except /account/me which accepts any active application role.","item":[
+      {"name":"GET My profile","request":{"method":"GET","url":"{{apiBaseUrl}}/account/me"}},
+      {"name":"GET Account orders","request":{"method":"GET","url":"{{apiBaseUrl}}/account/orders"}},
+      {"name":"GET Account order","request":{"method":"GET","url":"{{apiBaseUrl}}/account/orders/{{orderReference}}"}},
+      {"name":"GET Account tickets","request":{"method":"GET","url":"{{apiBaseUrl}}/account/tickets"}},
+      {"name":"GET Account ticket","request":{"method":"GET","url":"{{apiBaseUrl}}/account/tickets/{{ticketId}}"}},
+      {"name":"GET Account ticket download URL","request":{"method":"GET","description":"Returns a short-lived URL when the document is READY.","url":"{{apiBaseUrl}}/account/tickets/{{ticketId}}/download"}},
+      {"name":"GET Customer orders (legacy resource)","request":{"method":"GET","url":"{{apiBaseUrl}}/customer/orders"}},
+      {"name":"GET Customer ticket (legacy resource)","request":{"method":"GET","url":"{{apiBaseUrl}}/customer/tickets/{{ticketId}}"}},
+      {"name":"GET Customer ticket download URL (legacy resource)","request":{"method":"GET","url":"{{apiBaseUrl}}/customer/tickets/{{ticketId}}/download"}},
+      {"name":"POST Resend order confirmation","request":{"method":"POST","url":"{{apiBaseUrl}}/customer/orders/{{orderReference}}/resend-confirmation"}}
+    ]},
+    {"name":"Checkout and payments","description":"Guest checkout; no customer account or session is required. All amounts are in kobo.","item":[
+      {"name":"POST Quote checkout","request":{"method":"POST","url":"{{apiBaseUrl}}/orders/quote","body":{"mode":"raw","raw":"{\"eventId\":\"{{eventId}}\",\"items\":[{\"ticketTypeId\":\"{{ticketTypeId}}\",\"quantity\":2}]}"}}},
+      {"name":"POST Create order","request":{"method":"POST","description":"Creates the inventory hold and initializes payment when the order total is non-zero.","url":"{{apiBaseUrl}}/orders","body":{"mode":"raw","raw":"{\"eventId\":\"{{eventId}}\",\"buyer\":{\"name\":\"Jane Doe\",\"email\":\"jane@example.com\",\"phone\":\"+2348012345678\"},\"items\":[{\"ticketTypeId\":\"{{ticketTypeId}}\",\"quantity\":2}]}"}}},
+      {"name":"GET Order status","request":{"method":"GET","url":"{{apiBaseUrl}}/orders/{{orderReference}}/status"}},
+      {"name":"POST Initialize order payment","request":{"method":"POST","url":"{{apiBaseUrl}}/orders/{{orderReference}}/payments"}},
+      {"name":"POST Reconcile latest order payment","request":{"method":"POST","url":"{{apiBaseUrl}}/orders/{{orderReference}}/reconcile"}},
+      {"name":"POST Reconcile payment by reference","request":{"method":"POST","url":"{{apiBaseUrl}}/payments/{{paymentReference}}/reconcile"}}
+    ]},
+    {"name":"Organizer event catalogue","description":"Requires ORGANIZER role.","item":[
+      {"name":"POST Create event","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events","body":{"mode":"raw","raw":"{\"categoryId\":\"replace-with-category-id\",\"title\":\"Lagos Music Night\",\"slug\":\"lagos-music-night\",\"description\":\"Live music\",\"city\":\"Lagos\",\"state\":\"Lagos\",\"venue\":\"Harbour Hall\",\"address\":\"1 Marina Road\",\"timeZone\":\"Africa/Lagos\",\"startAt\":\"2026-12-15T18:00:00.000Z\",\"endAt\":\"2026-12-15T22:00:00.000Z\"}"}}},
+      {"name":"GET Owned events","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events"}},
+      {"name":"GET Owned event","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}"}},
+      {"name":"PATCH Update event","request":{"method":"PATCH","description":"Submit one or more editable event fields.","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}","body":{"mode":"raw","raw":"{\"title\":\"Updated title\"}"}}},
+      {"name":"POST Publish event","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/publish"}},
+      {"name":"POST Unpublish event","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/unpublish"}},
+      {"name":"POST Create ticket type","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/ticket-types","body":{"mode":"raw","raw":"{\"name\":\"General Admission\",\"description\":\"Standard entry\",\"priceKobo\":500000,\"capacity\":250,\"maxPerOrder\":4}"}}},
+      {"name":"PATCH Update ticket type","request":{"method":"PATCH","description":"Optional fields include name, description, priceKobo, capacity, salesStartAt, salesEndAt, maxPerOrder, isActive.","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/ticket-types/{{ticketTypeId}}","body":{"mode":"raw","raw":"{\"priceKobo\":550000,\"isActive\":true}"}}},
+      {"name":"DELETE Ticket type","request":{"method":"DELETE","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/ticket-types/{{ticketTypeId}}"}}
+    ]},
+    {"name":"RSVP and admission","description":"Public RSVP routes are noted; all organizer routes require ORGANIZER role.","item":[
+      {"name":"POST Create guest list","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/guest-lists","body":{"mode":"raw","raw":"{\"name\":\"VIP guests\",\"categories\":[{\"name\":\"VIP\",\"isRestricted\":true}],\"maxResponses\":100,\"expiresAt\":\"2026-12-14T23:59:59.000Z\"}"}}},
+      {"name":"POST Create RSVP link","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/guest-lists/{{guestListId}}/links","body":{"mode":"raw","raw":"{\"categoryId\":\"replace-with-category-id\",\"maxResponses\":25,\"expiresAt\":\"2026-12-14T23:59:59.000Z\"}"}}},
+      {"name":"GET RSVP link (public)","request":{"method":"GET","url":"{{apiBaseUrl}}/rsvp/{{rsvpToken}}"}},
+      {"name":"POST RSVP response (public)","request":{"method":"POST","url":"{{apiBaseUrl}}/rsvp/{{rsvpToken}}/responses","body":{"mode":"raw","raw":"{\"idempotencyKey\":\"rsvp-0001\",\"name\":\"Jane Doe\",\"email\":\"jane@example.com\",\"requestedCategoryId\":\"replace-with-category-id\"}"}}},
+      {"name":"GET List guests","request":{"method":"GET","description":"Optional query: query, responseStatus (PENDING|ACCEPTED|DECLINED), credentialStatus (ACTIVE|REVOKED).","url":"{{apiBaseUrl}}/organizer/guest-lists/{{guestListId}}/guests?query=Jane&responseStatus=ACCEPTED&credentialStatus=ACTIVE"}},
+      {"name":"POST Add guest","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/guest-lists/{{guestListId}}/guests","body":{"mode":"raw","raw":"{\"name\":\"Jane Doe\",\"email\":\"jane@example.com\",\"categoryId\":\"replace-with-category-id\"}"}}},
+      {"name":"PATCH Update guest","request":{"method":"PATCH","url":"{{apiBaseUrl}}/organizer/guests/{{guestId}}","body":{"mode":"raw","raw":"{\"name\":\"Jane Q. Doe\",\"email\":\"janeq@example.com\"}"}}},
+      {"name":"PATCH Update guest in list","request":{"method":"PATCH","url":"{{apiBaseUrl}}/organizer/guest-lists/{{guestListId}}/guests","body":{"mode":"raw","raw":"{\"guestId\":\"{{guestId}}\",\"name\":\"Jane Q. Doe\",\"email\":\"janeq@example.com\"}"}}},
+      {"name":"DELETE Remove guest","request":{"method":"DELETE","url":"{{apiBaseUrl}}/organizer/guests/{{guestId}}"}},
+      {"name":"GET Export guests CSV","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/guest-lists/{{guestListId}}/guests.csv"}},
+      {"name":"POST Revoke guest credential","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/guests/{{guestId}}/revoke"}},
+      {"name":"POST Preview check-in","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/check-ins/preview","body":{"mode":"raw","raw":"{\"token\":\"replace-with-admission-token\"}"}}},
+      {"name":"POST Confirm check-in","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/check-ins/confirm","body":{"mode":"raw","raw":"{\"token\":\"replace-with-admission-token\"}"}}},
+      {"name":"GET Check-in summary","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/check-ins/summary"}}
+    ]},
+    {"name":"Organizer operations","description":"Requires ORGANIZER role.","item":[
+      {"name":"GET Event dashboard","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/dashboard"}},
+      {"name":"GET Event orders","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/orders"}},
+      {"name":"GET Event attendees","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/attendees"}},
+      {"name":"GET Export attendees CSV","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/attendees.csv"}},
+      {"name":"POST Media upload intent","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/media/upload-intent","body":{"mode":"raw","raw":"{\"contentType\":\"image/jpeg\",\"contentLength\":123456}"}}},
+      {"name":"POST Complete media upload","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/media/{{mediaId}}/complete"}},
+      {"name":"POST Complete media upload (body variant)","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/media/complete","body":{"mode":"raw","raw":"{\"mediaId\":\"{{mediaId}}\"}"}}},
+      {"name":"POST Create refund request","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/orders/{{orderId}}/refund-requests","body":{"mode":"raw","raw":"{\"ticketIds\":[\"{{ticketId}}\"],\"ticketRefundKobo\":500000,\"platformFeeRefundKobo\":5000,\"reason\":\"Event cancelled\"}"}}},
+      {"name":"PATCH Update refund request","request":{"method":"PATCH","url":"{{apiBaseUrl}}/organizer/refund-requests/{{refundRequestId}}","body":{"mode":"raw","raw":"{\"ticketRefundKobo\":500000,\"platformFeeRefundKobo\":5000,\"reason\":\"Updated amount\"}"}}},
+      {"name":"POST Cancel refund request","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/refund-requests/{{refundRequestId}}/cancel"}},
+      {"name":"GET Refund requests","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/refund-requests"}},
+      {"name":"POST Create payout request","request":{"method":"POST","url":"{{apiBaseUrl}}/organizer/events/{{eventId}}/payout-requests"}},
+      {"name":"GET Payout requests","request":{"method":"GET","url":"{{apiBaseUrl}}/organizer/payout-requests"}}
+    ]},
+    {"name":"Administration","description":"Requires ADMIN role.","item":[
+      {"name":"GET Administration summary","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/summary"}},
+      {"name":"GET Events","request":{"method":"GET","description":"Optional state: DRAFT, PUBLISHED, SUSPENDED, CANCELLED.","url":"{{apiBaseUrl}}/admin/events?state=PUBLISHED"}},
+      {"name":"POST Suspend event","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/events/{{eventId}}/suspend","body":{"mode":"raw","raw":"{\"reason\":\"Policy review\"}"}}},
+      {"name":"POST Restore event","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/events/{{eventId}}/restore"}},
+      {"name":"PATCH Set event featured","request":{"method":"PATCH","url":"{{apiBaseUrl}}/admin/events/{{eventId}}/featured","body":{"mode":"raw","raw":"{\"featured\":true}"}}},
+      {"name":"GET Users","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/users?q=jane"}},
+      {"name":"POST Block user","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/users/{{profileId}}/block","body":{"mode":"raw","raw":"{\"reason\":\"Terms violation\"}"}}},
+      {"name":"POST Unblock user","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/users/{{profileId}}/unblock"}},
+      {"name":"GET Orders","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/orders?q=ET-"}},
+      {"name":"GET Refund requests","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/refund-requests"}},
+      {"name":"POST Approve refund","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/approve","body":{"mode":"raw","raw":"{\"ticketRefundKobo\":500000,\"platformFeeRefundKobo\":5000,\"reason\":\"Approved\"}"}}},
+      {"name":"POST Reject refund","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/reject","body":{"mode":"raw","raw":"{\"reason\":\"Insufficient evidence\"}"}}},
+      {"name":"POST Mark refund processed","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/mark-processed","body":{"mode":"raw","raw":"{\"gatewayRefundReference\":\"refund-001\",\"gatewayStatus\":\"success\"}"}}},
+      {"name":"GET Payout requests","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/payout-requests"}},
+      {"name":"POST Approve payout","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/payout-requests/{{payoutRequestId}}/approve","body":{"mode":"raw","raw":"{\"reason\":\"Approved after reconciliation\"}"}}},
+      {"name":"POST Reject payout","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/payout-requests/{{payoutRequestId}}/reject","body":{"mode":"raw","raw":"{\"reason\":\"Bank verification failed\"}"}}},
+      {"name":"POST Mark payout paid","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/payout-requests/{{payoutRequestId}}/mark-paid","body":{"mode":"raw","raw":"{\"transferReference\":\"transfer-001\",\"transferDate\":\"2026-12-16T10:30:00.000Z\"}"}}},
+      {"name":"GET Active platform fee rule","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/platform-fee-rule"}},
+      {"name":"PUT Replace platform fee rule","request":{"method":"PUT","description":"mode is FIXED or PERCENTAGE; send fixedAmountKobo or percentageBasisPoints as appropriate.","url":"{{apiBaseUrl}}/admin/platform-fee-rule","body":{"mode":"raw","raw":"{\"mode\":\"PERCENTAGE\",\"percentageBasisPoints\":250,\"effectiveAt\":\"2026-12-01T00:00:00.000Z\",\"reason\":\"Annual update\"}"}}}
+    ]},
+    {"name":"Webhooks","item":[
+      {"name":"POST Paystack webhook","request":{"method":"POST","description":"Public. paystackSignature must be HMAC SHA-512 for the exact raw body using PAYSTACK_SECRET_KEY.","header":[{"key":"x-paystack-signature","value":"{{paystackSignature}}"}],"url":"{{apiBaseUrl}}/webhooks/paystack","body":{"mode":"raw","raw":"{\"event\":\"charge.success\",\"data\":{\"reference\":\"{{paymentReference}}\"}}"}}}
+    ]}
+  ]
+}

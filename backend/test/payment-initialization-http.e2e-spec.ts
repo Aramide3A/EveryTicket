@@ -27,11 +27,11 @@ describe('POST /orders/:reference/payments', () => {
       .expect(503, { message: 'payments are not configured', error: 'Service Unavailable', statusCode: 503 });
   });
 
-  it('requires an authenticated customer before creating a payment attempt', async () => {
+  it('allows a guest to retry payment initialization by high-entropy order reference', async () => {
     process.env.PAYSTACK_SECRET_KEY = 'sk_test_configured_for_http_contract';
 
     await request(app.getHttpServer())
       .post('/orders/order-reference/payments')
-      .expect(401);
+      .expect(503);
   });
 });
