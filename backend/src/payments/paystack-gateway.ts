@@ -15,7 +15,14 @@ export type PaystackVerification = {
   paidAt?: Date;
 };
 
-export type PaystackGateway = {
+export type PaystackRefund = {
+  reference: string;
+  status: 'pending' | 'processing' | 'needs-attention' | 'failed' | 'processed';
+  amountKobo: number;
+  currency: string;
+};
+
+export type PaymentGateway = {
   initializeTransaction(input: {
     reference: string;
     email: string;
@@ -24,6 +31,19 @@ export type PaystackGateway = {
   }): Promise<{ authorizationUrl: string; accessCode: string }>;
   verifyTransaction(reference: string): Promise<PaystackVerification>;
 };
+
+export type RefundGateway = {
+  createRefund(input: {
+    transactionReference: string;
+    amountKobo: number;
+    currency: string;
+    customerNote: string;
+    merchantNote: string;
+  }): Promise<PaystackRefund>;
+  fetchRefund(reference: string): Promise<PaystackRefund>;
+};
+
+export type PaystackGateway = PaymentGateway & RefundGateway;
 
 export function createPaystackGateway({
   secretKey,
@@ -72,6 +92,27 @@ export function createPaystackGateway({
         ...(paidAt ? { paidAt } : {}),
       };
     },
+
+    async createRefund({ transactionReference, amountKobo, currency, customerNote, merchantNote }) {
+      const response = await request(fetchFn, '/refund', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          transaction: transactionReference,
+          amount: amountKobo,
+          currency,
+          customer_note: customerNote,
+          merchant_note: merchantNote,
+        }),
+      }, secretKey);
+      const data = readRecord(response.data, 'Paystack refund response');
+      return readPaystackRefund(data);
+    },
+
+    async fetchRefund(reference) {
+      const response = await request(fetchFn, `/refund/${encodeURIComponent(reference)}`, {}, secretKey);
+      return readPaystackRefund(readRecord(response.data, 'Paystack refund response'));
+    },
   };
 }
 
@@ -114,11 +155,34 @@ function readInteger(value: unknown, label: string): number {
   return value;
 }
 
+function readIdentifier(value: unknown, label: string): string {
+  if ((typeof value !== 'string' && typeof value !== 'number') || String(value).length === 0) {
+    throw new Error(`Paystack ${label} is invalid`);
+  }
+  return String(value);
+}
+
 function readPaymentStatus(value: unknown): 'success' | 'failed' | 'pending' {
   if (value === 'success' || value === 'failed' || value === 'pending') {
     return value;
   }
   throw new Error('Paystack status is invalid');
+}
+
+function readRefundStatus(value: unknown): PaystackRefund['status'] {
+  if (value === 'pending' || value === 'processing' || value === 'needs-attention' || value === 'failed' || value === 'processed') {
+    return value;
+  }
+  throw new Error('Paystack refund status is invalid');
+}
+
+function readPaystackRefund(data: Record<string, unknown>): PaystackRefund {
+  return {
+    reference: readIdentifier(data.id, 'refund id'),
+    status: readRefundStatus(data.status),
+    amountKobo: readInteger(data.amount, 'amount'),
+    currency: readString(data.currency, 'currency'),
+  };
 }
 
 function readDate(value: unknown, label: string): Date {

@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import type { INestApplication } from '@nestjs/common';
+import request from 'supertest';
+import { createApi } from '../src/api.js';
 import { createDatabaseClient } from '../src/persistence/prisma-client.js';
 
 type CreateCheckoutOrder = (input: {
@@ -349,3 +352,68 @@ async function createFixture(
     VALUES (${ids.feeRuleId}, ${Number(`8${Date.now().toString().slice(-5)}`)}, 'FIXED', 500, '2031-12-01T00:00:00.000Z', false, NOW())
   `;
 }
+
+describe('payment HTTP boundaries', () => {
+  let app: INestApplication | undefined;
+  let originalDatabaseUrl: string | undefined;
+  let originalPaystackSecret: string | undefined;
+
+  beforeEach(async () => {
+    originalDatabaseUrl = process.env.DATABASE_URL;
+    originalPaystackSecret = process.env.PAYSTACK_SECRET_KEY;
+    delete process.env.DATABASE_URL;
+    delete process.env.PAYSTACK_SECRET_KEY;
+    app = await createApi();
+  });
+
+  afterEach(async () => {
+    await app?.close();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+    if (originalPaystackSecret === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+    else process.env.PAYSTACK_SECRET_KEY = originalPaystackSecret;
+    app = undefined;
+  });
+
+  it('refuses payment initialization without server-side payment configuration', async () => {
+    await request(app?.getHttpServer())
+      .post('/orders/order-reference/payments')
+      .expect(503, { message: 'payments are not configured', error: 'Service Unavailable', statusCode: 503 });
+  });
+
+  it('allows a guest to retry payment initialization by high-entropy order reference', async () => {
+    process.env.PAYSTACK_SECRET_KEY = 'sk_test_configured_for_http_contract';
+
+    await request(app?.getHttpServer())
+      .post('/orders/order-reference/payments')
+      .expect(503);
+  });
+
+  it('provides a callback-safe refresh route without allowing the browser to mark an order paid itself', async () => {
+    await request(app?.getHttpServer())
+      .post('/payments/pay-reference/reconcile')
+      .expect(503, { message: 'payments are not configured', error: 'Service Unavailable', statusCode: 503 });
+  });
+
+  it('does not allow an unauthenticated caller to reconcile a payment reference', async () => {
+    process.env.PAYSTACK_SECRET_KEY = 'sk_test_configured_for_http_contract';
+
+    await request(app?.getHttpServer())
+      .post('/payments/pay-reference/reconcile')
+      .expect(401);
+  });
+});
+
+describe('payment reconciliation configuration', () => {
+  it('uses a five-minute reconciliation interval by default', async () => {
+    const { readPaymentReconciliationInterval } = await import('../src/payments/reconciliation-config.js');
+
+    expect(readPaymentReconciliationInterval(undefined)).toBe(300_000);
+  });
+
+  it.each(['0', '-1', '500.5', 'invalid'])('rejects an unsafe reconciliation interval %s', async (value) => {
+    const { readPaymentReconciliationInterval } = await import('../src/payments/reconciliation-config.js');
+
+    expect(() => readPaymentReconciliationInterval(value)).toThrow();
+  });
+});

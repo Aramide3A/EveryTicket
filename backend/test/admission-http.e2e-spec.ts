@@ -15,6 +15,9 @@ describe('RSVP and admission HTTP contracts', () => {
 
   it('does not let an unauthenticated caller create an organizer guest list', async () => {
     await request(app.getHttpServer())
+      .get('/organizer/events/known-event/guest-lists')
+      .expect(401);
+    await request(app.getHttpServer())
       .post('/organizer/events/known-event/guest-lists')
       .send({ name: 'VIP guests' })
       .expect(401);
@@ -30,6 +33,9 @@ describe('RSVP and admission HTTP contracts', () => {
   it('does not let an unauthenticated caller revoke a guest credential', async () => {
     await request(app.getHttpServer())
       .post('/organizer/guests/known-guest/revoke')
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/organizer/guests/known-guest/credential/reissue')
       .expect(401);
   });
 

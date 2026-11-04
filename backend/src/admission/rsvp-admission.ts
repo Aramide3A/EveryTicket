@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
-import { readTicketCredential } from '../worker/ticket-credential.js';
+import { createGuestCredential, readGuestCredential, readTicketCredential } from '../worker/ticket-credential.js';
 
 type AdmissionCode = 'VALID' | 'INVALID' | 'WRONG_EVENT' | 'REVOKED' | 'UNPAID' | 'ALREADY_USED';
 
@@ -45,6 +45,36 @@ export async function createGuestList({
   });
 }
 
+export async function listOwnedGuestLists({
+  database,
+  organizerProfileId,
+  eventId,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  eventId: string;
+}): Promise<Array<{ id: string; name: string; isEnabled: boolean; expiresAt: Date | null; maxResponses: number | null; responseCount: number; categories: Array<{ id: string; name: string; isRestricted: boolean }> }>> {
+  const event = await database.event.findFirst({
+    where: { id: eventId, organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
+    select: { id: true },
+  });
+  if (!event) throw new Error('event is unavailable to this organizer');
+  const lists = await database.guestList.findMany({
+    where: { eventId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      isEnabled: true,
+      expiresAt: true,
+      maxResponses: true,
+      categories: { orderBy: { createdAt: 'asc' }, select: { id: true, name: true, isRestricted: true } },
+      _count: { select: { guests: true } },
+    },
+  });
+  return lists.map(({ _count, ...list }) => ({ ...list, responseCount: _count.guests }));
+}
+
 export async function createRsvpLink({
   database,
   organizerProfileId,
@@ -83,24 +113,32 @@ export async function submitRsvpResponse({
   idempotencyKey,
   name,
   email,
+  responseStatus = 'ACCEPTED',
   requestedCategoryId,
   now,
+  admissionTokenSecret = process.env.ADMISSION_TOKEN_SECRET,
 }: {
   database: PrismaClient;
   token: string;
   idempotencyKey: string;
   name: string;
   email: string;
+  responseStatus?: 'ACCEPTED' | 'DECLINED';
   requestedCategoryId?: string;
   now: Date;
-}): Promise<{ guestId: string; admissionToken?: string; categoryId: string | null }> {
+  admissionTokenSecret?: string;
+}): Promise<{ guestId: string; responseStatus: 'ACCEPTED' | 'DECLINED'; admissionToken?: string; categoryId: string | null }> {
   if (!name.trim() || !email.trim() || !idempotencyKey) throw new RangeError('name, email, and idempotency key are required');
+  if (!['ACCEPTED', 'DECLINED'].includes(responseStatus)) throw new RangeError('RSVP response status is invalid');
   return database.$transaction(async (transaction) => {
     const previous = await transaction.guest.findUnique({
       where: { idempotencyKey },
-      select: { id: true, categoryId: true },
+      select: { id: true, categoryId: true, responseStatus: true },
     });
-    if (previous) return { guestId: previous.id, categoryId: previous.categoryId };
+    if (previous) {
+      if (previous.responseStatus === 'PENDING') throw new Error('RSVP response is incomplete');
+      return { guestId: previous.id, responseStatus: previous.responseStatus, categoryId: previous.categoryId };
+    }
 
     const link = await transaction.rsvpLink.findUnique({
       where: { tokenDigest: digest(token) },
@@ -110,15 +148,17 @@ export async function submitRsvpResponse({
       throw new Error('RSVP link is unavailable');
     }
     await transaction.$queryRaw`SELECT id FROM guest_list WHERE id = ${link.guestListId} FOR UPDATE`;
-    const [listResponses, linkResponses] = await Promise.all([
-      transaction.guest.count({ where: { guestListId: link.guestListId } }),
-      transaction.guest.count({ where: { rsvpLinkId: link.id } }),
-    ]);
-    if ((link.guestList.maxResponses !== null && listResponses >= link.guestList.maxResponses) || (link.maxResponses !== null && linkResponses >= link.maxResponses)) {
-      throw new Error('RSVP capacity is full');
+    if (responseStatus === 'ACCEPTED') {
+      const [listResponses, linkResponses] = await Promise.all([
+        transaction.guest.count({ where: { guestListId: link.guestListId, responseStatus: 'ACCEPTED' } }),
+        transaction.guest.count({ where: { rsvpLinkId: link.id, responseStatus: 'ACCEPTED' } }),
+      ]);
+      if ((link.guestList.maxResponses !== null && listResponses >= link.guestList.maxResponses) || (link.maxResponses !== null && linkResponses >= link.maxResponses)) {
+        throw new Error('RSVP capacity is full');
+      }
     }
     const categoryId = chooseCategory(link.categoryId, requestedCategoryId, link.guestList.categories);
-    const admissionToken = randomBytes(32).toString('base64url');
+    const admissionToken = responseStatus === 'ACCEPTED' ? randomBytes(32).toString('base64url') : undefined;
     const guest = await transaction.guest.create({
       data: {
         guestListId: link.guestListId,
@@ -126,22 +166,25 @@ export async function submitRsvpResponse({
         categoryId,
         name: name.trim(),
         email: email.trim().toLowerCase(),
-        responseStatus: 'ACCEPTED',
-        credentialStatus: 'ACTIVE',
-        admissionTokenDigest: digest(admissionToken),
+        responseStatus,
+        credentialStatus: responseStatus === 'ACCEPTED' ? 'ACTIVE' : 'REVOKED',
+        admissionTokenDigest: admissionToken ? digest(admissionToken) : null,
         idempotencyKey,
         respondedAt: now,
       },
       select: { id: true, categoryId: true },
     });
-    await transaction.notificationJob.create({
-      data: {
-        type: 'RSVP_CONFIRMATION',
-        recipientEmail: email.trim().toLowerCase(),
-        idempotencyKey: `guest:${guest.id}:confirmation`,
-      },
-    });
-    return { guestId: guest.id, admissionToken, categoryId: guest.categoryId };
+    if (responseStatus === 'ACCEPTED') {
+      await transaction.notificationJob.create({
+        data: {
+          type: 'RSVP_CONFIRMATION',
+          recipientEmail: email.trim().toLowerCase(),
+          idempotencyKey: `guest:${guest.id}:confirmation`,
+          content: rsvpNotificationContent(guest.id, digest(admissionToken as string), admissionTokenSecret),
+        },
+      });
+    }
+    return { guestId: guest.id, responseStatus, ...(admissionToken ? { admissionToken } : {}), categoryId: guest.categoryId };
   });
 }
 
@@ -161,6 +204,31 @@ export async function revokeGuest({
   });
   if (!guest) throw new Error('guest is unavailable to this organizer');
   await database.guest.update({ where: { id: guest.id }, data: { credentialStatus: 'REVOKED' } });
+}
+
+export async function reissueGuestCredential({
+  database,
+  organizerProfileId,
+  guestId,
+  admissionTokenSecret = process.env.ADMISSION_TOKEN_SECRET,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  guestId: string;
+  admissionTokenSecret?: string;
+}): Promise<{ admissionToken: string }> {
+  const guest = await database.guest.findFirst({
+    where: { id: guestId, guestList: { event: { organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } } } },
+    select: { id: true, email: true, responseStatus: true },
+  });
+  if (!guest) throw new Error('guest is unavailable to this organizer');
+  if (guest.responseStatus !== 'ACCEPTED') throw new Error('only accepted guests can receive admission');
+  const admissionToken = randomBytes(32).toString('base64url');
+  await database.$transaction([
+    database.guest.update({ where: { id: guest.id }, data: { admissionTokenDigest: digest(admissionToken), credentialStatus: 'ACTIVE' } }),
+    database.notificationJob.create({ data: { type: 'RSVP_CONFIRMATION', recipientEmail: guest.email, content: rsvpNotificationContent(guest.id, digest(admissionToken), admissionTokenSecret), idempotencyKey: `guest:${guest.id}:credential:${randomBytes(12).toString('base64url')}` } }),
+  ]);
+  return { admissionToken };
 }
 
 export async function getRsvpLink({
@@ -237,6 +305,7 @@ export async function addGuest({
   email,
   categoryId,
   now,
+  admissionTokenSecret = process.env.ADMISSION_TOKEN_SECRET,
 }: {
   database: PrismaClient;
   organizerProfileId: string;
@@ -245,6 +314,7 @@ export async function addGuest({
   email: string;
   categoryId?: string;
   now: Date;
+  admissionTokenSecret?: string;
 }): Promise<{ guestId: string; admissionToken: string }> {
   if (!name.trim() || !email.trim()) throw new RangeError('name and email are required');
   await requireOwnedGuestList(database, organizerProfileId, guestListId);
@@ -268,7 +338,7 @@ export async function addGuest({
       select: { id: true },
     });
     await transaction.notificationJob.create({
-      data: { type: 'RSVP_CONFIRMATION', recipientEmail: email.trim().toLowerCase(), idempotencyKey: `guest:${guest.id}:confirmation` },
+      data: { type: 'RSVP_CONFIRMATION', recipientEmail: email.trim().toLowerCase(), content: rsvpNotificationContent(guest.id, digest(admissionToken), admissionTokenSecret), idempotencyKey: `guest:${guest.id}:confirmation` },
     });
     return { guestId: guest.id, admissionToken };
   });
@@ -473,6 +543,15 @@ async function findCredential(database: PrismaClient, token: string, ticketCrede
   | { kind: 'ticket'; id: string; eventId: string; name: string; active: boolean; inactiveCode: 'REVOKED' | 'UNPAID' }
   | null
 > {
+  const signedGuestId = ticketCredentialSecret ? /^eg1\.([^.]+)\.[A-Za-z0-9_-]+$/.exec(token)?.[1] : undefined;
+  if (signedGuestId && ticketCredentialSecret) {
+    const guest = await database.guest.findUnique({
+      where: { id: signedGuestId },
+      select: { id: true, name: true, responseStatus: true, credentialStatus: true, admissionTokenDigest: true, guestList: { select: { eventId: true } } },
+    });
+    if (!guest?.admissionTokenDigest || readGuestCredential({ token, admissionTokenDigest: guest.admissionTokenDigest, secret: ticketCredentialSecret }) !== guest.id) return null;
+    return { kind: 'guest', id: guest.id, eventId: guest.guestList.eventId, name: guest.name, active: guest.responseStatus === 'ACCEPTED' && guest.credentialStatus === 'ACTIVE', inactiveCode: 'REVOKED' };
+  }
   const signedTicketId = ticketCredentialSecret ? /^et1\.([^.]+)\.[A-Za-z0-9_-]+$/.exec(token)?.[1] : undefined;
   if (signedTicketId && ticketCredentialSecret) {
     const ticket = await database.ticket.findUnique({
@@ -503,6 +582,10 @@ async function findCredential(database: PrismaClient, token: string, ticketCrede
   });
   if (!ticket) return null;
   return ticketCredential(ticket);
+}
+
+function rsvpNotificationContent(guestId: string, admissionTokenDigest: string, secret?: string): string | undefined {
+  return secret ? `Your RSVP is confirmed. Admission credential: ${createGuestCredential({ guestId, admissionTokenDigest, secret })}` : undefined;
 }
 
 function ticketCredential(ticket: { id: string; holderName: string; status: 'ACTIVE' | 'REVOKED'; eventId: string; order: { status: string } }): { kind: 'ticket'; id: string; eventId: string; name: string; active: boolean; inactiveCode: 'REVOKED' | 'UNPAID' } {

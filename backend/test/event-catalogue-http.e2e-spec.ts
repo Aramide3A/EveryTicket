@@ -27,6 +27,8 @@ describe('event catalogue HTTP contract', () => {
     await request(server).get('/organizer/events/known-event').expect(401);
     await request(server).patch('/organizer/events/known-event').send({ title: 'Updated' }).expect(401);
     await request(server).post('/organizer/events/known-event/unpublish').expect(401);
+    await request(server).post('/organizer/events/known-event/cancel').send({ reason: 'Cancelled' }).expect(401);
+    await request(server).delete('/organizer/events/known-event').expect(401);
     await request(server).post('/organizer/events/known-event/ticket-types').send({}).expect(401);
     await request(server).patch('/organizer/events/known-event/ticket-types/known-ticket-type').send({}).expect(401);
     await request(server).delete('/organizer/events/known-event/ticket-types/known-ticket-type').expect(401);

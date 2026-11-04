@@ -31,6 +31,8 @@ type OrganizerOperations = {
     organizerProfileId: string;
     eventId: string;
   }): Promise<string>;
+  listOrganizerCheckIns(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<Array<{ id: string; kind: 'TICKET' | 'GUEST'; attendeeId: string; name: string; checkedInAt: Date; checkedInBy: { id: string; name: string } }>>;
+  exportOrganizerCheckInsCsv(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<string>;
   createRefundRequest(input: {
     database: ReturnType<typeof createDatabaseClient>;
     organizerProfileId: string;
@@ -49,9 +51,17 @@ type OrganizerOperations = {
   }): Promise<{ id: string; status: 'REQUESTED'; requestedAmountKobo: number; calculatedPayableKobo: number }>;
   listOrganizerRefundRequests(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string }): Promise<Array<{ id: string; totalRefundKobo: number; status: string }>>;
   listOrganizerPayoutRequests(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string }): Promise<Array<{ id: string; requestedAmountKobo: number; status: string }>>;
+  getOrganizerPayoutRequest(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; payoutRequestId: string }): Promise<{ id: string; event: { id: string; title: string }; status: string; requestedAmountKobo: number; calculatedPayableKobo: number; requestedAt: Date; reviewReason: string | null; transferReference: string | null; transferDate: Date | null; paidAt: Date | null; receiptAvailable: boolean }>;
+  exportOrganizerPayoutReceiptCsv(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; payoutRequestId: string }): Promise<string>;
   listOrganizerOrders(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<Array<{ id: string; reference: string; totalKobo: number; status: string }>>;
+  pageOrganizerOrders(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string; page: number; pageSize: number; skip: number; query?: string; status?: string }): Promise<{ items: Array<{ id: string; status: string }>; page: number; pageSize: number; total: number }>;
+  pageOrganizerAttendees(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string; page: number; pageSize: number; skip: number; query?: string; kind?: 'TICKET' | 'GUEST' }): Promise<{ items: Array<{ kind: string; name: string }>; page: number; pageSize: number; total: number }>;
+  pageOrganizerRefundRequests(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; page: number; pageSize: number; skip: number; status?: string }): Promise<{ items: Array<{ id: string; status: string }>; page: number; pageSize: number; total: number }>;
+  pageOrganizerPayoutRequests(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; page: number; pageSize: number; skip: number; status?: string }): Promise<{ items: Array<{ id: string; status: string }>; page: number; pageSize: number; total: number }>;
+  getOrganizerOrderRefundInputs(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; orderId: string }): Promise<{ id: string; reference: string; buyerName: string; buyerEmail: string; status: string; maxPlatformFeeRefundKobo: number; tickets: Array<{ id: string; holderName: string; holderEmail: string; ticketTypeName: string; priceKobo: number; eligible: boolean; maxTicketRefundKobo: number }> }>;
   updateRefundRequest(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; refundRequestId: string; ticketRefundKobo: number; platformFeeRefundKobo: number; reason: string }): Promise<{ totalRefundKobo: number }>;
   cancelRefundRequest(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; refundRequestId: string }): Promise<void>;
+  getOrganizerRefundRequest(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; refundRequestId: string }): Promise<{ id: string; orderId: string; reason: string; status: string; ticketRefundKobo: number; platformFeeRefundKobo: number; totalRefundKobo: number; maxTicketRefundKobo: number; maxPlatformFeeRefundKobo: number; permittedActions: Array<'UPDATE' | 'CANCEL'>; tickets: Array<{ id: string; holderName: string; ticketTypeName: string; priceKobo: number }> }>;
 };
 
 async function loadOrganizerOperations(): Promise<OrganizerOperations | undefined> {
@@ -119,6 +129,8 @@ describe('organizer operations', () => {
     await expect(operations.listOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId })).resolves.toEqual([
       expect.objectContaining({ id: ids.orderId, totalKobo: 2200, status: 'PAID' }),
     ]);
+    await expect(operations.pageOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, query: 'no-match', status: 'PAID' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(operations.pageOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, status: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
     await expect(operations.listOrganizerOrders({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
   });
 
@@ -140,6 +152,25 @@ describe('organizer operations', () => {
       `TICKET,'=Attendee,${ids.ticketId}@example.test,General,,ACTIVE,checked-in`,
     );
     await expect(operations.listOrganizerAttendees({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
+    await expect(operations.pageOrganizerAttendees({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, query: 'guest attendee', kind: 'GUEST' })).resolves.toEqual(expect.objectContaining({ items: [expect.objectContaining({ kind: 'GUEST', name: 'Guest attendee' })], total: 1 }));
+  });
+
+  it('returns and exports owner-scoped ticket and guest check-in history', async () => {
+    const operations = await loadOrganizerOperations();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(operations).toBeDefined();
+    if (!operations || !databaseUrl) throw new Error('organizer operations are unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createDashboardFixture(client, ids);
+
+    const history = await operations.listOrganizerCheckIns({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId });
+    expect(history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'TICKET', attendeeId: ids.ticketId, name: '=Attendee', checkedInBy: { id: ids.organizerProfileId, name: 'Owner' } }),
+      expect.objectContaining({ kind: 'GUEST', attendeeId: ids.guestId, name: 'Guest attendee', checkedInBy: { id: ids.organizerProfileId, name: 'Owner' } }),
+    ]));
+    await expect(operations.exportOrganizerCheckInsCsv({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId })).resolves.toContain("TICKET,'=Attendee,");
+    await expect(operations.listOrganizerCheckIns({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
   });
 
   it('records an owner refund request only for selected paid-order tickets', async () => {
@@ -163,9 +194,24 @@ describe('organizer operations', () => {
       now: new Date('2031-12-02T10:00:00.000Z'),
     });
     expect(refund).toMatchObject({ id: expect.any(String), status: 'REQUESTED', totalRefundKobo: 1600 });
+    await expect(operations.getOrganizerRefundRequest({ database: client, organizerProfileId: ids.organizerProfileId, refundRequestId: refund.id })).resolves.toEqual({
+      id: refund.id,
+      orderId: ids.orderId,
+      reason: 'Event timing changed',
+      status: 'REQUESTED',
+      ticketRefundKobo: 1500,
+      platformFeeRefundKobo: 100,
+      totalRefundKobo: 1600,
+      maxTicketRefundKobo: 2000,
+      maxPlatformFeeRefundKobo: 200,
+      permittedActions: ['UPDATE', 'CANCEL'],
+      tickets: [{ id: ids.ticketId, holderName: '=Attendee', ticketTypeName: 'General', priceKobo: 2000 }],
+    });
+    await expect(operations.getOrganizerRefundRequest({ database: client, organizerProfileId: ids.otherOrganizerProfileId, refundRequestId: refund.id })).rejects.toThrow('refund request is unavailable to this organizer');
     await expect(operations.listOrganizerRefundRequests({ database: client, organizerProfileId: ids.organizerProfileId })).resolves.toEqual([
       expect.objectContaining({ id: refund.id, totalRefundKobo: 1600, status: 'REQUESTED' }),
     ]);
+    await expect(operations.pageOrganizerRefundRequests({ database: client, organizerProfileId: ids.organizerProfileId, page: 1, pageSize: 10, skip: 0, status: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
     await expect(operations.getOrganizerDashboard({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, now: new Date('2031-12-02T10:00:00.000Z') })).resolves.toMatchObject({
       refundsRecordedKobo: 1600,
       payableKobo: 500,
@@ -213,6 +259,32 @@ describe('organizer operations', () => {
     })).rejects.toThrow('refund request is unavailable to this organizer');
   });
 
+  it('exposes owner-scoped refund inputs and remaining amount limits', async () => {
+    const operations = await loadOrganizerOperations();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(operations).toBeDefined();
+    if (!operations || !databaseUrl) throw new Error('organizer operations are unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createDashboardFixture(client, ids);
+
+    await expect(operations.getOrganizerOrderRefundInputs({ database: client, organizerProfileId: ids.organizerProfileId, orderId: ids.orderId })).resolves.toEqual({
+      id: ids.orderId,
+      reference: `dashboard-${ids.orderId}`,
+      buyerName: 'Buyer',
+      buyerEmail: `${ids.orderId}@example.test`,
+      status: 'PAID',
+      maxPlatformFeeRefundKobo: 200,
+      tickets: [{ id: ids.ticketId, holderName: '=Attendee', holderEmail: `${ids.ticketId}@example.test`, ticketTypeName: 'General', priceKobo: 2000, eligible: true, maxTicketRefundKobo: 2000 }],
+    });
+    await operations.createRefundRequest({ database: client, organizerProfileId: ids.organizerProfileId, orderId: ids.orderId, ticketIds: [ids.ticketId], ticketRefundKobo: 1500, platformFeeRefundKobo: 100, reason: 'Partial refund', now: new Date() });
+    await expect(operations.getOrganizerOrderRefundInputs({ database: client, organizerProfileId: ids.organizerProfileId, orderId: ids.orderId })).resolves.toEqual(expect.objectContaining({
+      maxPlatformFeeRefundKobo: 100,
+      tickets: [expect.objectContaining({ id: ids.ticketId, eligible: false, maxTicketRefundKobo: 0 })],
+    }));
+    await expect(operations.getOrganizerOrderRefundInputs({ database: client, organizerProfileId: ids.otherOrganizerProfileId, orderId: ids.orderId })).rejects.toThrow('order is unavailable to this organizer');
+  });
+
   it('calculates one post-event payout from paid ticket subtotals and reserves it', async () => {
     const operations = await loadOrganizerOperations();
     const databaseUrl = process.env.DATABASE_URL;
@@ -240,6 +312,13 @@ describe('organizer operations', () => {
     await expect(operations.listOrganizerPayoutRequests({ database: client, organizerProfileId: ids.organizerProfileId })).resolves.toEqual([
       expect.objectContaining({ id: payout.id, requestedAmountKobo: 2000, status: 'REQUESTED' }),
     ]);
+    await expect(operations.pageOrganizerPayoutRequests({ database: client, organizerProfileId: ids.organizerProfileId, page: 1, pageSize: 10, skip: 0, status: 'PAID' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(operations.getOrganizerPayoutRequest({ database: client, organizerProfileId: ids.organizerProfileId, payoutRequestId: payout.id })).resolves.toEqual(expect.objectContaining({ id: payout.id, status: 'REQUESTED', receiptAvailable: false, transferReference: null }));
+    await expect(operations.exportOrganizerPayoutReceiptCsv({ database: client, organizerProfileId: ids.organizerProfileId, payoutRequestId: payout.id })).rejects.toThrow('payout receipt is unavailable');
+    await client.payoutRequest.update({ where: { id: payout.id }, data: { status: 'PAID', transferReference: '=TRF_123', transferDate: new Date('2033-01-02T10:00:00.000Z'), paidAt: new Date('2033-01-02T11:00:00.000Z') } });
+    await expect(operations.getOrganizerPayoutRequest({ database: client, organizerProfileId: ids.organizerProfileId, payoutRequestId: payout.id })).resolves.toEqual(expect.objectContaining({ id: payout.id, status: 'PAID', receiptAvailable: true, transferReference: '=TRF_123' }));
+    await expect(operations.exportOrganizerPayoutReceiptCsv({ database: client, organizerProfileId: ids.organizerProfileId, payoutRequestId: payout.id })).resolves.toContain("'=TRF_123");
+    await expect(operations.getOrganizerPayoutRequest({ database: client, organizerProfileId: ids.otherOrganizerProfileId, payoutRequestId: payout.id })).rejects.toThrow('payout request is unavailable to this organizer');
     await expect(operations.createPayoutRequest({
       database: client,
       organizerProfileId: ids.organizerProfileId,

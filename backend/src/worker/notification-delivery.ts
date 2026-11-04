@@ -23,7 +23,7 @@ export async function deliverPendingNotifications({
   const jobs = await database.notificationJob.findMany({
     where: { status: 'PENDING', attempts: { lt: maxAttempts } },
     orderBy: { createdAt: 'asc' },
-    select: { id: true, type: true, recipientEmail: true, attempts: true },
+    select: { id: true, type: true, recipientEmail: true, content: true, attempts: true },
   });
   let sent = 0;
   let retried = 0;
@@ -32,7 +32,7 @@ export async function deliverPendingNotifications({
     const claimed = await database.notificationJob.updateMany({ where: { id: job.id, status: 'PENDING' }, data: { status: 'SENDING' } });
     if (claimed.count !== 1) continue;
     try {
-      await sender.send(messageFor(job.type, job.recipientEmail));
+      await sender.send(notificationMessage({ type: job.type, to: job.recipientEmail, content: job.content }));
       await database.notificationJob.update({ where: { id: job.id }, data: { status: 'SENT', attempts: job.attempts + 1, sentAt: now, failureDetail: null } });
       sent += 1;
     } catch (error) {
@@ -49,9 +49,9 @@ export async function deliverPendingNotifications({
   return { sent, retried, failed };
 }
 
-function messageFor(type: 'ORDER_CONFIRMATION' | 'RSVP_CONFIRMATION' | 'REFUND_DECISION' | 'PAYOUT_DECISION', to: string): { to: string; subject: string; text: string } {
+export function notificationMessage({ type, to, content }: { type: 'ORDER_CONFIRMATION' | 'RSVP_CONFIRMATION' | 'REFUND_DECISION' | 'PAYOUT_DECISION'; to: string; content?: string | null }): { to: string; subject: string; text: string } {
   if (type === 'ORDER_CONFIRMATION') return { to, subject: 'Your EverythingTicket order', text: 'Your ticket order is confirmed.' };
-  if (type === 'RSVP_CONFIRMATION') return { to, subject: 'Your EverythingTicket RSVP', text: 'Your RSVP is confirmed.' };
+  if (type === 'RSVP_CONFIRMATION') return { to, subject: 'Your EverythingTicket RSVP', text: content ?? 'Your RSVP is confirmed.' };
   return { to, subject: 'Your EverythingTicket update', text: 'There is an update to your organizer request.' };
 }
 

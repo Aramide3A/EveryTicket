@@ -52,6 +52,30 @@ type Administration = {
     reason: string;
     now: Date;
   }): Promise<void>;
+  executeApprovedRefund(input: {
+    database: ReturnType<typeof createDatabaseClient>;
+    adminProfileId: string;
+    refundRequestId: string;
+    gateway: {
+      createRefund(input: {
+        transactionReference: string;
+        amountKobo: number;
+        currency: string;
+        customerNote: string;
+        merchantNote: string;
+      }): Promise<{ reference: string; status: 'pending' | 'processing' | 'needs-attention' | 'failed' | 'processed'; amountKobo: number; currency: string }>;
+    };
+    now: Date;
+  }): Promise<{ reference: string; status: string; amountKobo: number; currency: string }>;
+  reconcileExecutedRefund(input: {
+    database: ReturnType<typeof createDatabaseClient>;
+    adminProfileId: string;
+    refundRequestId: string;
+    gateway: {
+      fetchRefund(reference: string): Promise<{ reference: string; status: 'pending' | 'processing' | 'needs-attention' | 'failed' | 'processed'; amountKobo: number; currency: string }>;
+    };
+    now: Date;
+  }): Promise<{ reference: string; status: string; amountKobo: number; currency: string }>;
   markRefundProcessed(input: {
     database: ReturnType<typeof createDatabaseClient>;
     adminProfileId: string;
@@ -99,6 +123,11 @@ type Administration = {
     refundLiabilityKobo: number;
     payoutLiabilityKobo: number;
   }>;
+  pageAdministrationEvents(input: { database: ReturnType<typeof createDatabaseClient>; adminProfileId: string; page: number; pageSize: number; skip: number; state?: string }): Promise<{ items: unknown[]; total: number }>;
+  pageAdministrationProfiles(input: { database: ReturnType<typeof createDatabaseClient>; adminProfileId: string; page: number; pageSize: number; skip: number; query?: string }): Promise<{ items: unknown[]; total: number }>;
+  pageAdministrationOrders(input: { database: ReturnType<typeof createDatabaseClient>; adminProfileId: string; page: number; pageSize: number; skip: number; query?: string }): Promise<{ items: unknown[]; total: number }>;
+  pageAdministrationRefundRequests(input: { database: ReturnType<typeof createDatabaseClient>; adminProfileId: string; page: number; pageSize: number; skip: number; status?: string }): Promise<{ items: unknown[]; total: number }>;
+  pageAdministrationPayoutRequests(input: { database: ReturnType<typeof createDatabaseClient>; adminProfileId: string; page: number; pageSize: number; skip: number; status?: string }): Promise<{ items: unknown[]; total: number }>;
 };
 
 async function loadAdministration(): Promise<Administration | undefined> {
@@ -121,6 +150,7 @@ describe('administration', () => {
       if (ids.refundRequestId) await client.$executeRaw`DELETE FROM refund_request WHERE id = ${ids.refundRequestId}`;
       if (ids.payoutRequestId) await client.$executeRaw`DELETE FROM payout_request WHERE id = ${ids.payoutRequestId}`;
       if (ids.ticketId) await client.$executeRaw`DELETE FROM ticket WHERE id = ${ids.ticketId}`;
+      if (ids.paymentAttemptId) await client.$executeRaw`DELETE FROM payment_attempt WHERE id = ${ids.paymentAttemptId}`;
       if (ids.orderId) await client.$executeRaw`DELETE FROM "order" WHERE id = ${ids.orderId}`;
       if (ids.ticketTypeId) await client.$executeRaw`DELETE FROM ticket_type WHERE id = ${ids.ticketTypeId}`;
       if (ids.eventId) await client.$executeRaw`DELETE FROM event WHERE id = ${ids.eventId}`;
@@ -237,7 +267,7 @@ describe('administration', () => {
     await expect(client.auditLog.findFirst({ where: { actorProfileId: ids.adminProfileId, action: 'EVENT_FEATURED_UPDATED', targetId: ids.eventId }, select: { targetType: true, details: true } })).resolves.toEqual({ targetType: 'EVENT', details: { featured: true } });
   });
 
-  it('approves a refund before gateway completion and revokes only its selected tickets when processed', async () => {
+  it('executes an approved refund once and revokes only its selected tickets after provider completion', async () => {
     const administration = await loadAdministration();
     const databaseUrl = process.env.DATABASE_URL;
     expect(administration).toBeDefined();
@@ -253,11 +283,38 @@ describe('administration', () => {
 
     await expect(client.refundRequest.findUnique({ where: { id: ids.refundRequestId }, select: { status: true, totalRefundKobo: true, processedAt: true } })).resolves.toEqual({ status: 'APPROVED', totalRefundKobo: 2100, processedAt: null });
     await expect(client.ticket.findUnique({ where: { id: ids.ticketId }, select: { status: true } })).resolves.toEqual({ status: 'ACTIVE' });
-    await administration.markRefundProcessed({ database: client, adminProfileId: ids.adminProfileId, refundRequestId: ids.refundRequestId, gatewayRefundReference: 'RFD_123', gatewayStatus: 'processed', now: new Date('2031-06-02T00:00:00.000Z') });
+    const gatewayCalls: unknown[] = [];
+    const gateway = {
+      createRefund: async (input: unknown) => {
+        gatewayCalls.push(input);
+        return { reference: '3018284', status: 'pending' as const, amountKobo: 2100, currency: 'NGN' };
+      },
+    };
+    await expect(administration.executeApprovedRefund({ database: client, adminProfileId: ids.adminProfileId, refundRequestId: ids.refundRequestId, gateway, now: new Date('2031-06-01T01:00:00.000Z') })).resolves.toEqual({ reference: '3018284', status: 'pending', amountKobo: 2100, currency: 'NGN' });
+    expect(gatewayCalls).toEqual([{
+      transactionReference: `pay-${ids.orderId}`,
+      amountKobo: 2100,
+      currency: 'NGN',
+      customerNote: 'Customer request',
+      merchantNote: `EverythingTicket refund ${ids.refundRequestId}`,
+    }]);
+    await expect(client.refundRequest.findUnique({ where: { id: ids.refundRequestId }, select: { status: true, gatewayRefundReference: true, gatewayStatus: true, processedAt: true } })).resolves.toEqual({ status: 'PROCESSING', gatewayRefundReference: '3018284', gatewayStatus: 'pending', processedAt: null });
+    await expect(client.ticket.findUnique({ where: { id: ids.ticketId }, select: { status: true } })).resolves.toEqual({ status: 'ACTIVE' });
+    await expect(administration.executeApprovedRefund({ database: client, adminProfileId: ids.adminProfileId, refundRequestId: ids.refundRequestId, gateway, now: new Date('2031-06-01T01:01:00.000Z') })).rejects.toThrow('refund is unavailable');
+    expect(gatewayCalls).toHaveLength(1);
+    const reconciliationCalls: string[] = [];
+    const reconciliationGateway = {
+      fetchRefund: async (reference: string) => {
+        reconciliationCalls.push(reference);
+        return { reference, status: 'processed' as const, amountKobo: 2100, currency: 'NGN' };
+      },
+    };
+    await expect(administration.reconcileExecutedRefund({ database: client, adminProfileId: ids.adminProfileId, refundRequestId: ids.refundRequestId, gateway: reconciliationGateway, now: new Date('2031-06-02T00:00:00.000Z') })).resolves.toEqual({ reference: '3018284', status: 'processed', amountKobo: 2100, currency: 'NGN' });
+    expect(reconciliationCalls).toEqual(['3018284']);
 
-    await expect(client.refundRequest.findUnique({ where: { id: ids.refundRequestId }, select: { status: true, gatewayRefundReference: true, gatewayStatus: true, processedAt: true } })).resolves.toEqual({ status: 'PROCESSED', gatewayRefundReference: 'RFD_123', gatewayStatus: 'processed', processedAt: new Date('2031-06-02T00:00:00.000Z') });
+    await expect(client.refundRequest.findUnique({ where: { id: ids.refundRequestId }, select: { status: true, gatewayRefundReference: true, gatewayStatus: true, processedAt: true } })).resolves.toEqual({ status: 'PROCESSED', gatewayRefundReference: '3018284', gatewayStatus: 'processed', processedAt: new Date('2031-06-02T00:00:00.000Z') });
     await expect(client.ticket.findUnique({ where: { id: ids.ticketId }, select: { status: true } })).resolves.toEqual({ status: 'REVOKED' });
-    await expect(client.auditLog.findMany({ where: { actorProfileId: ids.adminProfileId, targetId: ids.refundRequestId }, select: { action: true }, orderBy: { createdAt: 'asc' } })).resolves.toEqual([{ action: 'REFUND_APPROVED' }, { action: 'REFUND_PROCESSED' }]);
+    await expect(client.auditLog.findMany({ where: { actorProfileId: ids.adminProfileId, targetId: ids.refundRequestId }, select: { action: true }, orderBy: { createdAt: 'asc' } })).resolves.toEqual([{ action: 'REFUND_APPROVED' }, { action: 'REFUND_EXECUTED' }, { action: 'REFUND_PROCESSED' }]);
     await expect(client.notificationJob.count({ where: { recipientEmail: `${ids.targetUserId}@example.test`, type: 'REFUND_DECISION' } })).resolves.toBe(2);
   });
 
@@ -320,6 +377,13 @@ describe('administration', () => {
     await createRefundFixture(client, ids);
     await createPayoutFixture(client, ids);
 
+    const page = { page: 1, pageSize: 10, skip: 0 };
+    await expect(administration.pageAdministrationEvents({ database: client, adminProfileId: ids.adminProfileId, ...page, state: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(administration.pageAdministrationProfiles({ database: client, adminProfileId: ids.adminProfileId, ...page, query: 'no-match@example.test' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(administration.pageAdministrationOrders({ database: client, adminProfileId: ids.adminProfileId, ...page, query: 'no-match' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(administration.pageAdministrationRefundRequests({ database: client, adminProfileId: ids.adminProfileId, ...page, status: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(administration.pageAdministrationPayoutRequests({ database: client, adminProfileId: ids.adminProfileId, ...page, status: 'PAID' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+
     await expect(administration.getAdministrationSummary({ database: client, adminProfileId: ids.adminProfileId })).resolves.toEqual({
       paidOrderCount: baseline.paidOrderCount + 1,
       totalPaidKobo: baseline.totalPaidKobo + 2100,
@@ -351,9 +415,10 @@ async function createPublishedEvent(client: ReturnType<typeof createDatabaseClie
 }
 
 async function createRefundFixture(client: ReturnType<typeof createDatabaseClient>, ids: Record<string, string>): Promise<void> {
-  Object.assign(ids, { ticketTypeId: randomUUID(), orderId: randomUUID(), ticketId: randomUUID(), refundRequestId: randomUUID() });
+  Object.assign(ids, { ticketTypeId: randomUUID(), orderId: randomUUID(), paymentAttemptId: randomUUID(), ticketId: randomUUID(), refundRequestId: randomUUID() });
   await client.$executeRaw`INSERT INTO ticket_type (id, "eventId", name, "priceKobo", capacity, "isActive", "createdAt", "updatedAt") VALUES (${ids.ticketTypeId}, ${ids.eventId}, 'General', 2000, 10, true, NOW(), NOW())`;
   await client.$executeRaw`INSERT INTO "order" (id, reference, "eventId", "buyerName", "buyerEmail", currency, "ticketSubtotalKobo", "platformFeeKobo", "totalKobo", "platformFeeRuleId", "platformFeeRuleVersion", "platformFeeMode", "platformFeeFixedAmountKobo", "holdExpiresAt", status, "paidAt", "createdAt") VALUES (${ids.orderId}, ${`order-${ids.orderId}`}, ${ids.eventId}, 'Buyer', ${`${ids.orderId}@example.test`}, 'NGN', 2000, 100, 2100, ${ids.initialRuleId}, 1, 'FIXED', 100, '2031-06-10T10:00:00.000Z', 'PAID', '2031-05-01T10:00:00.000Z', NOW())`;
+  await client.$executeRaw`INSERT INTO payment_attempt (id, "orderId", reference, "expectedAmountKobo", currency, status, "verifiedAt", "createdAt") VALUES (${ids.paymentAttemptId}, ${ids.orderId}, ${`pay-${ids.orderId}`}, 2100, 'NGN', 'VERIFIED_SUCCESS', NOW(), NOW())`;
   await client.$executeRaw`INSERT INTO ticket (id, "orderId", "eventId", "ticketTypeId", "holderName", "holderEmail", "ticketTypeName", "priceKobo", "admissionTokenDigest", "issuedAt") VALUES (${ids.ticketId}, ${ids.orderId}, ${ids.eventId}, ${ids.ticketTypeId}, 'Buyer', 'buyer@example.test', 'General', 2000, ${`digest-${ids.ticketId}`}, NOW())`;
   await client.$executeRaw`INSERT INTO refund_request (id, "organizerProfileId", "eventId", "orderId", "ticketRefundKobo", "platformFeeRefundKobo", "totalRefundKobo", reason, "requestedAt", "createdAt", "updatedAt") VALUES (${ids.refundRequestId}, ${ids.targetProfileId}, ${ids.eventId}, ${ids.orderId}, 2000, 100, 2100, 'Customer request', NOW(), NOW(), NOW())`;
   await client.$executeRaw`INSERT INTO refund_request_ticket ("refundRequestId", "ticketId") VALUES (${ids.refundRequestId}, ${ids.ticketId})`;

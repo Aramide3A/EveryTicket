@@ -258,13 +258,15 @@ model EventMedia {
   contentType   String
   contentLength Int
   status        EventMediaStatus @default(PENDING)
+  position      Int              @default(0)
+  isCover       Boolean          @default(false)
   expiresAt     DateTime
   completedAt   DateTime?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
   event         Event            @relation(fields: [eventId], references: [id], onDelete: Restrict)
 
-  @@index([eventId, status])
+  @@index([eventId, status, position])
   @@index([status, expiresAt])
   @@map("event_media")
 }
@@ -318,6 +320,7 @@ model Order {
   buyerName                        String
   buyerEmail                       String
   buyerPhone                       String?
+  guestAccessTokenDigest           String?             @unique
   currency                         String              @default("NGN")
   ticketSubtotalKobo               Int
   platformFeeKobo                  Int
@@ -532,6 +535,7 @@ model NotificationJob {
   orderId        String?
   type           NotificationJobType
   recipientEmail String
+  content        String?
   idempotencyKey String                @unique
   status         NotificationJobStatus @default(PENDING)
   attempts       Int                   @default(0)

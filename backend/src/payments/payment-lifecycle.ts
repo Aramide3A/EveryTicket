@@ -1,6 +1,6 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { finalizePaidOrder } from './finalize-paid-order.js';
-import type { PaystackGateway } from './paystack-gateway.js';
+import type { PaymentGateway } from './paystack-gateway.js';
 
 export async function initializePayment({
   database,
@@ -10,7 +10,7 @@ export async function initializePayment({
   now,
 }: {
   database: PrismaClient;
-  gateway: PaystackGateway;
+  gateway: PaymentGateway;
   orderReference: string;
   paymentReference: string;
   now: Date;
@@ -65,7 +65,7 @@ export async function processVerifiedPayment({
   now,
 }: {
   database: PrismaClient;
-  gateway: PaystackGateway;
+  gateway: PaymentGateway;
   paymentReference: string;
   now: Date;
 }): Promise<
@@ -114,7 +114,7 @@ export async function reconcilePendingPayments({
   now,
 }: {
   database: PrismaClient;
-  gateway: PaystackGateway;
+  gateway: PaymentGateway;
   now: Date;
 }): Promise<{ checked: number; paid: number; needsResolution: number }> {
   const attempts = await database.paymentAttempt.findMany({

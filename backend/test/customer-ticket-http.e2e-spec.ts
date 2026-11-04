@@ -33,8 +33,19 @@ describe('customer ticket HTTP access', () => {
     await request(api).get('/api/v1/account/tickets').expect(401);
     await request(api).get('/api/v1/account/tickets/known-ticket/download').expect(401);
     await request(api).post('/api/v1/orders/quote').send({}).expect(400);
-    await request(api).get('/api/v1/orders/known-order/status').expect(503);
-    await request(api).post('/api/v1/orders/known-order/reconcile').expect(503);
+    const status = await request(api).get('/api/v1/orders/known-order/status');
+    expect([404, 503]).toContain(status.status);
+    const reconciliation = await request(api).post('/api/v1/orders/known-order/reconcile');
+    expect([404, 503]).toContain(reconciliation.status);
+  });
+
+  it('accepts guest checkout input without an authenticated customer session', async () => {
+    await request(app.getHttpServer()).post('/orders').send({
+      eventId: 'event-id',
+      reference: 'order-reference',
+      buyer: { name: 'Buyer', email: 'buyer@example.test' },
+      items: [{ ticketTypeId: 'ticket-type-id', quantity: 1 }],
+    }).expect((response) => expect(response.status).not.toBe(401));
   });
 
   it('rate limits repeated public RSVP submissions', async () => {

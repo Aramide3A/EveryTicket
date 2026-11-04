@@ -1,5 +1,6 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { profileHasRole, profileRoleFilter } from '../identity/current-profile.js';
+import type { PaystackRefund, RefundGateway } from '../payments/paystack-gateway.js';
 
 export async function replacePlatformFeeRule({
   database,
@@ -240,7 +241,7 @@ export async function markRefundProcessed({
   await database.$transaction(async (transaction) => {
     const [admin, refund] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: 'APPROVED' }, select: { id: true, organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } } }),
+      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: { in: ['APPROVED', 'PROCESSING'] } }, select: { id: true, organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } } }),
     ]);
     if (!admin || !refund) throw new Error('refund is unavailable for this administrator');
     await transaction.refundRequest.update({
@@ -254,6 +255,152 @@ export async function markRefundProcessed({
     await transaction.notificationJob.create({
       data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:processed` },
     });
+  });
+}
+
+export async function executeApprovedRefund({
+  database,
+  adminProfileId,
+  refundRequestId,
+  gateway,
+  now,
+}: {
+  database: PrismaClient;
+  adminProfileId: string;
+  refundRequestId: string;
+  gateway: Pick<RefundGateway, 'createRefund'>;
+  now: Date;
+}): Promise<PaystackRefund> {
+  const refund = await database.$transaction(async (transaction) => {
+    const [admin, approved] = await Promise.all([
+      transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
+      transaction.refundRequest.findFirst({
+        where: { id: refundRequestId, status: 'APPROVED' },
+        select: {
+          id: true,
+          totalRefundKobo: true,
+          reason: true,
+          order: {
+            select: {
+              currency: true,
+              paymentAttempts: { where: { status: 'VERIFIED_SUCCESS' }, orderBy: { verifiedAt: 'desc' }, take: 1, select: { reference: true } },
+            },
+          },
+        },
+      }),
+    ]);
+    const transactionReference = approved?.order.paymentAttempts[0]?.reference;
+    if (!admin || !approved || !transactionReference) throw new Error('refund is unavailable for this administrator');
+    const claimed = await transaction.refundRequest.updateMany({ where: { id: approved.id, status: 'APPROVED' }, data: { status: 'PROCESSING', gatewayStatus: 'initiating' } });
+    if (claimed.count !== 1) throw new Error('refund is unavailable for this administrator');
+    return { ...approved, transactionReference };
+  });
+
+  let result: PaystackRefund;
+  try {
+    result = await gateway.createRefund({
+      transactionReference: refund.transactionReference,
+      amountKobo: refund.totalRefundKobo,
+      currency: refund.order.currency,
+      customerNote: refund.reason,
+      merchantNote: `EverythingTicket refund ${refund.id}`,
+    });
+  } catch (error) {
+    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING', gatewayStatus: 'initiating' }, data: { gatewayStatus: 'unknown' } });
+    throw error;
+  }
+
+  if (result.amountKobo !== refund.totalRefundKobo || result.currency !== refund.order.currency) {
+    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING' }, data: { status: 'FAILED', gatewayRefundReference: result.reference, gatewayStatus: 'response-mismatch' } });
+    throw new Error('Paystack refund response does not match the approved refund');
+  }
+  await applyRefundProviderResult({ database, adminProfileId, refundRequestId: refund.id, result, now, auditAction: 'REFUND_EXECUTED' });
+  return result;
+}
+
+export async function reconcileExecutedRefund({
+  database,
+  adminProfileId,
+  refundRequestId,
+  gateway,
+  now,
+}: {
+  database: PrismaClient;
+  adminProfileId: string;
+  refundRequestId: string;
+  gateway: Pick<RefundGateway, 'fetchRefund'>;
+  now: Date;
+}): Promise<PaystackRefund> {
+  const refund = await database.$transaction(async (transaction) => {
+    const [admin, processing] = await Promise.all([
+      transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
+      transaction.refundRequest.findFirst({
+        where: { id: refundRequestId, status: 'PROCESSING', gatewayRefundReference: { not: null } },
+        select: { id: true, totalRefundKobo: true, gatewayRefundReference: true, gatewayStatus: true, order: { select: { currency: true } } },
+      }),
+    ]);
+    const gatewayRefundReference = processing?.gatewayRefundReference;
+    const gatewayStatus = processing?.gatewayStatus;
+    if (!admin || !processing || !gatewayRefundReference || !gatewayStatus || gatewayStatus === 'reconciling') throw new Error('refund is unavailable for this administrator');
+    const claimed = await transaction.refundRequest.updateMany({
+      where: { id: processing.id, status: 'PROCESSING', gatewayStatus },
+      data: { gatewayStatus: 'reconciling' },
+    });
+    if (claimed.count !== 1) throw new Error('refund is unavailable for this administrator');
+    return { ...processing, gatewayRefundReference, gatewayStatus };
+  });
+
+  let result: PaystackRefund;
+  try {
+    result = await gateway.fetchRefund(refund.gatewayRefundReference);
+  } catch (error) {
+    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING', gatewayStatus: 'reconciling' }, data: { gatewayStatus: refund.gatewayStatus } });
+    throw error;
+  }
+  if (result.reference !== refund.gatewayRefundReference || result.amountKobo !== refund.totalRefundKobo || result.currency !== refund.order.currency) {
+    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING' }, data: { status: 'FAILED', gatewayStatus: 'response-mismatch' } });
+    throw new Error('Paystack refund response does not match the approved refund');
+  }
+  await applyRefundProviderResult({ database, adminProfileId, refundRequestId: refund.id, result, now, auditAction: result.status === 'processed' ? 'REFUND_PROCESSED' : 'REFUND_RECONCILED' });
+  return result;
+}
+
+async function applyRefundProviderResult({
+  database,
+  adminProfileId,
+  refundRequestId,
+  result,
+  now,
+  auditAction,
+}: {
+  database: PrismaClient;
+  adminProfileId: string;
+  refundRequestId: string;
+  result: PaystackRefund;
+  now: Date;
+  auditAction: string;
+}): Promise<void> {
+  await database.$transaction(async (transaction) => {
+    const refund = await transaction.refundRequest.findUniqueOrThrow({
+      where: { id: refundRequestId },
+      select: { organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } },
+    });
+    const status = result.status === 'processed' ? 'PROCESSED' : result.status === 'failed' ? 'FAILED' : 'PROCESSING';
+    await transaction.refundRequest.update({
+      where: { id: refundRequestId },
+      data: { status, gatewayRefundReference: result.reference, gatewayStatus: result.status, ...(status === 'PROCESSED' ? { processedAt: now } : {}) },
+    });
+    if (status === 'PROCESSED') {
+      await transaction.ticket.updateMany({ where: { id: { in: refund.tickets.map(({ ticketId }) => ticketId) } }, data: { status: 'REVOKED' } });
+    }
+    await transaction.auditLog.create({
+      data: { actorProfileId: adminProfileId, action: auditAction, targetType: 'REFUND_REQUEST', targetId: refundRequestId, details: { gatewayRefundReference: result.reference, gatewayStatus: result.status } },
+    });
+    if (status === 'PROCESSED' || status === 'FAILED') {
+      await transaction.notificationJob.create({
+        data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refundRequestId}:${status.toLowerCase()}` },
+      });
+    }
   });
 }
 
@@ -447,6 +594,48 @@ export async function listAdministrationPayoutRequests({ database, adminProfileI
     select: { id: true, status: true, requestedAmountKobo: true, calculatedPayableKobo: true, requestedAt: true, reviewReason: true, transferReference: true, transferDate: true, paidAt: true, organizer: { select: { id: true, user: { select: { name: true, email: true } } } }, event: { select: { id: true, title: true } } },
     orderBy: { requestedAt: 'desc' },
   });
+}
+
+export async function pageAdministrationEvents({ database, adminProfileId, state, page, pageSize, skip }: { database: PrismaClient; adminProfileId: string; state?: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED'; page: number; pageSize: number; skip: number }) {
+  await requireActiveAdministrator(database, adminProfileId);
+  const where = state ? { status: state } : undefined;
+  const select = { id: true, title: true, slug: true, status: true, featured: true, startAt: true, endAt: true, organizer: { select: { id: true, user: { select: { name: true, email: true } } } } } as const;
+  const [items, total] = await database.$transaction([database.event.findMany({ where, select, orderBy: { createdAt: 'desc' }, skip, take: pageSize }), database.event.count({ where })]);
+  return { items, page, pageSize, total };
+}
+
+export async function pageAdministrationProfiles({ database, adminProfileId, query, page, pageSize, skip }: { database: PrismaClient; adminProfileId: string; query?: string; page: number; pageSize: number; skip: number }) {
+  await requireActiveAdministrator(database, adminProfileId);
+  const text = query?.trim();
+  const where = text ? { OR: [{ user: { name: { contains: text, mode: 'insensitive' as const } } }, { user: { email: { contains: text, mode: 'insensitive' as const } } }] } : undefined;
+  const select = { id: true, role: true, status: true, blockedAt: true, blockedByProfileId: true, blockReason: true, createdAt: true, user: { select: { name: true, email: true } } } as const;
+  const [items, total] = await database.$transaction([database.applicationProfile.findMany({ where, select, orderBy: { createdAt: 'desc' }, skip, take: pageSize }), database.applicationProfile.count({ where })]);
+  return { items, page, pageSize, total };
+}
+
+export async function pageAdministrationOrders({ database, adminProfileId, query, status, page, pageSize, skip }: { database: PrismaClient; adminProfileId: string; query?: string; status?: 'PENDING_PAYMENT' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION'; page: number; pageSize: number; skip: number }) {
+  await requireActiveAdministrator(database, adminProfileId);
+  const text = query?.trim();
+  const where = { ...(status ? { status } : {}), ...(text ? { OR: [{ reference: { contains: text, mode: 'insensitive' as const } }, { buyerEmail: { contains: text, mode: 'insensitive' as const } }, { paymentAttempts: { some: { reference: { contains: text, mode: 'insensitive' as const } } } }] } : {}) };
+  const select = { id: true, reference: true, buyerName: true, buyerEmail: true, status: true, totalKobo: true, createdAt: true, event: { select: { id: true, title: true } }, paymentAttempts: { select: { id: true, reference: true, status: true, expectedAmountKobo: true } } } as const;
+  const [items, total] = await database.$transaction([database.order.findMany({ where, select, orderBy: { createdAt: 'desc' }, skip, take: pageSize }), database.order.count({ where })]);
+  return { items, page, pageSize, total };
+}
+
+export async function pageAdministrationRefundRequests({ database, adminProfileId, page, pageSize, skip, status }: { database: PrismaClient; adminProfileId: string; page: number; pageSize: number; skip: number; status?: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'PROCESSING' | 'PROCESSED' | 'FAILED' | 'CANCELLED' }) {
+  await requireActiveAdministrator(database, adminProfileId);
+  const select = { id: true, status: true, ticketRefundKobo: true, platformFeeRefundKobo: true, totalRefundKobo: true, reason: true, requestedAt: true, reviewReason: true, gatewayRefundReference: true, gatewayStatus: true, processedAt: true, organizer: { select: { id: true, user: { select: { name: true, email: true } } } }, event: { select: { id: true, title: true } }, order: { select: { id: true, reference: true } } } as const;
+  const where = status ? { status } : undefined;
+  const [items, total] = await database.$transaction([database.refundRequest.findMany({ where, select, orderBy: { requestedAt: 'desc' }, skip, take: pageSize }), database.refundRequest.count({ where })]);
+  return { items, page, pageSize, total };
+}
+
+export async function pageAdministrationPayoutRequests({ database, adminProfileId, page, pageSize, skip, status }: { database: PrismaClient; adminProfileId: string; page: number; pageSize: number; skip: number; status?: 'REQUESTED' | 'APPROVED' | 'REJECTED' | 'PAID' | 'CANCELLED' }) {
+  await requireActiveAdministrator(database, adminProfileId);
+  const select = { id: true, status: true, requestedAmountKobo: true, calculatedPayableKobo: true, requestedAt: true, reviewReason: true, transferReference: true, transferDate: true, paidAt: true, organizer: { select: { id: true, user: { select: { name: true, email: true } } } }, event: { select: { id: true, title: true } } } as const;
+  const where = status ? { status } : undefined;
+  const [items, total] = await database.$transaction([database.payoutRequest.findMany({ where, select, orderBy: { requestedAt: 'desc' }, skip, take: pageSize }), database.payoutRequest.count({ where })]);
+  return { items, page, pageSize, total };
 }
 
 export async function getActivePlatformFeeRule({ database, adminProfileId, now }: { database: PrismaClient; adminProfileId: string; now: Date }) {

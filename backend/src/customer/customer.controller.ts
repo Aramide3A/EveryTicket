@@ -1,9 +1,10 @@
-import { ConflictException, Controller, Get, NotFoundException, Param, Post, Req } from '@nestjs/common';
+import { ConflictException, Controller, Get, NotFoundException, Param, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
 import { getCustomerTicket, getCustomerTicketDocument, getCustomerTicketDownload, listCustomerOrders, requestOrderConfirmationResend } from './customer-ticket-access.js';
+import { readCustomerOrderHistoryQuery } from './customer-order-history-query.js';
 
 const runCustomerDatabaseOperation = createDatabaseOperation('customer access is not configured');
 
@@ -12,15 +13,16 @@ const runCustomerDatabaseOperation = createDatabaseOperation('customer access is
 @Controller('customer')
 export class CustomerController {
   @Get('orders')
-  async orders(@Req() request: Request) {
+  async orders(@Req() request: Request, @Query('status') status: unknown, @Query('page') page: unknown, @Query('pageSize') pageSize: unknown) {
     const profile = await requireActiveProfile(request, 'CUSTOMER');
-    return runCustomerDatabaseOperation((database) => listCustomerOrders({ database, customerProfileId: profile.id }));
+    const query = readCustomerOrderHistoryQuery(status, page, pageSize);
+    return runCustomerDatabaseOperation((database) => listCustomerOrders({ database, customerProfileId: profile.id, ...query }));
   }
 
   @Get('tickets/:ticketId')
   async ticket(@Req() request: Request, @Param('ticketId') ticketId: string) {
     const profile = await requireActiveProfile(request, 'CUSTOMER');
-    return runCustomerDatabaseOperation((database) => getCustomerTicket({ database, customerProfileId: profile.id, ticketId }));
+    return runCustomerDatabaseOperation((database) => getCustomerTicket({ database, customerProfileId: profile.id, ticketId, admissionTokenSecret: process.env.ADMISSION_TOKEN_SECRET ?? '' }));
   }
 
   @Get('tickets/:ticketId/download')

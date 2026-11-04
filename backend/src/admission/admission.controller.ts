@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
-import { addGuest, confirmAdmission, createGuestList, createRsvpLink, exportGuestsCsv, getCheckInSummary, getRsvpLink, listGuests, previewAdmission, removeGuest, revokeGuest, submitRsvpResponse, updateGuest } from './rsvp-admission.js';
+import { addGuest, confirmAdmission, createGuestList, createRsvpLink, exportGuestsCsv, getCheckInSummary, getRsvpLink, listGuests, listOwnedGuestLists, previewAdmission, reissueGuestCredential, removeGuest, revokeGuest, submitRsvpResponse, updateGuest } from './rsvp-admission.js';
 
 const runAdmissionDatabaseOperation = createDatabaseOperation('admission is not configured');
 
@@ -11,6 +11,13 @@ const runAdmissionDatabaseOperation = createDatabaseOperation('admission is not 
 @Controller()
 export class AdmissionController {
   private readonly withDatabase = runAdmissionDatabaseOperation;
+  @Get('organizer/events/:eventId/guest-lists')
+  @ApiBearerAuth('session')
+  async guestLists(@Req() request: Request, @Param('eventId') eventId: string) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    return this.withDatabase((database) => listOwnedGuestLists({ database, organizerProfileId: profile.id, eventId }));
+  }
+
   @Post('organizer/events/:eventId/guest-lists')
   @ApiBearerAuth('session')
   async createGuestList(@Req() request: Request, @Param('eventId') eventId: string, @Body() body: unknown) {
@@ -43,7 +50,7 @@ export class AdmissionController {
   @Post('rsvp/:token/responses')
   async respond(@Param('token') token: string, @Body() body: unknown) {
     return this.withDatabase((database) => submitRsvpResponse({
-      database, token, idempotencyKey: readString(body, 'idempotencyKey'), name: readString(body, 'name'), email: readString(body, 'email'), requestedCategoryId: readOptionalString(body, 'requestedCategoryId'), now: new Date(),
+      database, token, idempotencyKey: readString(body, 'idempotencyKey'), name: readString(body, 'name'), email: readString(body, 'email'), responseStatus: readRsvpResponseStatus(body), requestedCategoryId: readOptionalString(body, 'requestedCategoryId'), now: new Date(),
     }));
   }
 
@@ -136,6 +143,13 @@ export class AdmissionController {
     return { revoked: true };
   }
 
+  @Post('organizer/guests/:guestId/credential/reissue')
+  @ApiBearerAuth('session')
+  async reissueCredential(@Req() request: Request, @Param('guestId') guestId: string) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    return this.withDatabase((database) => reissueGuestCredential({ database, organizerProfileId: profile.id, guestId }));
+  }
+
   @Post('organizer/events/:eventId/check-ins/preview')
   @ApiBearerAuth('session')
   async preview(@Req() request: Request, @Param('eventId') eventId: string, @Body() body: unknown) {
@@ -209,6 +223,10 @@ function readOptionalEnum<const T extends readonly string[]>(value: unknown, val
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || !values.includes(value)) throw new BadRequestException('query filter is invalid');
   return value as T[number];
+}
+
+function readRsvpResponseStatus(body: unknown): 'ACCEPTED' | 'DECLINED' | undefined {
+  return isRecord(body) ? readOptionalEnum(body.responseStatus, ['ACCEPTED', 'DECLINED'] as const) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

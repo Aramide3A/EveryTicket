@@ -4,9 +4,11 @@ import { createTicketCredential } from '../src/worker/ticket-credential.js';
 
 type RsvpAdmission = {
   createGuestList(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string; name: string; categories?: Array<{ name: string; isRestricted: boolean }>; maxResponses?: number; expiresAt?: Date }): Promise<{ id: string; categories: Array<{ id: string; name: string; isRestricted: boolean }> }>;
+  listOwnedGuestLists(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<Array<{ id: string; name: string; isEnabled: boolean; expiresAt: Date | null; maxResponses: number | null; responseCount: number; categories: Array<{ id: string; name: string; isRestricted: boolean }> }>>;
   createRsvpLink(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; guestListId: string; categoryId?: string; maxResponses?: number; expiresAt?: Date }): Promise<{ token: string }>;
-  submitRsvpResponse(input: { database: ReturnType<typeof createDatabaseClient>; token: string; idempotencyKey: string; name: string; email: string; requestedCategoryId?: string; now: Date }): Promise<{ guestId: string; admissionToken?: string; categoryId: string | null }>;
+  submitRsvpResponse(input: { database: ReturnType<typeof createDatabaseClient>; token: string; idempotencyKey: string; name: string; email: string; responseStatus?: 'ACCEPTED' | 'DECLINED'; requestedCategoryId?: string; now: Date }): Promise<{ guestId: string; responseStatus: 'ACCEPTED' | 'DECLINED'; admissionToken?: string; categoryId: string | null }>;
   revokeGuest(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; guestId: string; now: Date }): Promise<void>;
+  reissueGuestCredential(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; guestId: string }): Promise<{ admissionToken: string }>;
   getRsvpLink(input: { database: ReturnType<typeof createDatabaseClient>; token: string; now: Date }): Promise<{ available: boolean; guestListName?: string; fixedCategoryName?: string }>;
   listGuests(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; guestListId: string; query?: string; responseStatus?: 'PENDING' | 'ACCEPTED' | 'DECLINED'; credentialStatus?: 'ACTIVE' | 'REVOKED' }): Promise<Array<{ id: string; name: string; email: string; responseStatus: string; credentialStatus: string }>>;
   getCheckInSummary(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<{ checkedIn: number }>;
@@ -35,7 +37,7 @@ describe('RSVP and admission', () => {
     if (client) {
       if (ids.eventId) {
         await client.$executeRaw`DELETE FROM check_in WHERE "eventId" = ${ids.eventId}`;
-        await client.$executeRaw`DELETE FROM notification_job WHERE "recipientEmail" IN ('guest@example.test', 'guest-two@example.test', 'manual@example.test', 'other@example.test', 'capacity-one@example.test', 'capacity-two@example.test')`;
+        await client.$executeRaw`DELETE FROM notification_job WHERE "recipientEmail" IN ('guest@example.test', 'guest-two@example.test', 'manual@example.test', 'other@example.test', 'capacity-one@example.test', 'capacity-two@example.test', 'declined@example.test', 'accepted@example.test', 'late@example.test', 'recover@example.test', 'no-admission@example.test')`;
         await client.$executeRaw`DELETE FROM ticket WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM "order" WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM ticket_type WHERE "eventId" = ${ids.eventId}`;
@@ -89,8 +91,93 @@ describe('RSVP and admission', () => {
 
     expect(first.categoryId).toBe(fixedCategoryId);
     expect(first.admissionToken).toEqual(expect.any(String));
-    expect(replay).toEqual({ guestId: first.guestId, categoryId: fixedCategoryId });
+    expect(replay).toEqual({ guestId: first.guestId, responseStatus: 'ACCEPTED', categoryId: fixedCategoryId });
     expect(await client.guest.count({ where: { guestListId: list.id } })).toBe(1);
+  });
+
+  it('records an idempotent decline without a credential or consuming acceptance capacity', async () => {
+    const rsvp = await loadRsvpAdmission();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(rsvp).toBeDefined();
+    if (!rsvp || !databaseUrl) throw new Error('RSVP admission is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const list = await rsvp.createGuestList({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, name: 'One place', maxResponses: 1 });
+    const link = await rsvp.createRsvpLink({ database: client, organizerProfileId: ids.organizerProfileId, guestListId: list.id });
+
+    const declined = await rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'decline-once', name: 'No thank you', email: 'declined@example.test', responseStatus: 'DECLINED', now: new Date() });
+    const replay = await rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'decline-once', name: 'Changed mind', email: 'declined@example.test', responseStatus: 'ACCEPTED', now: new Date() });
+    expect(declined).toEqual({ guestId: expect.any(String), responseStatus: 'DECLINED', categoryId: null });
+    expect(replay).toEqual(declined);
+    await expect(client.guest.findUniqueOrThrow({ where: { id: declined.guestId }, select: { responseStatus: true, credentialStatus: true, admissionTokenDigest: true } })).resolves.toEqual({ responseStatus: 'DECLINED', credentialStatus: 'REVOKED', admissionTokenDigest: null });
+
+    const accepted = await rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'accept-after-decline', name: 'Yes please', email: 'accepted@example.test', responseStatus: 'ACCEPTED', now: new Date() });
+    expect(accepted).toMatchObject({ responseStatus: 'ACCEPTED', admissionToken: expect.any(String) });
+    await expect(rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'capacity-full', name: 'Too late', email: 'late@example.test', responseStatus: 'ACCEPTED', now: new Date() })).rejects.toThrow('RSVP capacity is full');
+  });
+
+  it('lets the owner rotate admission for an accepted guest but never a declined guest', async () => {
+    const rsvp = await loadRsvpAdmission();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(rsvp).toBeDefined();
+    if (!rsvp || !databaseUrl) throw new Error('RSVP admission is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const list = await rsvp.createGuestList({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, name: 'Recovery' });
+    const link = await rsvp.createRsvpLink({ database: client, organizerProfileId: ids.organizerProfileId, guestListId: list.id });
+    const accepted = await rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'recover-accepted', name: 'Recover me', email: 'recover@example.test', responseStatus: 'ACCEPTED', now: new Date() });
+    const declined = await rsvp.submitRsvpResponse({ database: client, token: link.token, idempotencyKey: 'recover-declined', name: 'No admission', email: 'no-admission@example.test', responseStatus: 'DECLINED', now: new Date() });
+    if (!accepted.admissionToken) throw new Error('initial credential was not issued');
+    await rsvp.revokeGuest({ database: client, organizerProfileId: ids.organizerProfileId, guestId: accepted.guestId, now: new Date() });
+
+    await expect(rsvp.reissueGuestCredential({ database: client, organizerProfileId: randomUUID(), guestId: accepted.guestId })).rejects.toThrow('guest is unavailable to this organizer');
+    await expect(rsvp.reissueGuestCredential({ database: client, organizerProfileId: ids.organizerProfileId, guestId: declined.guestId })).rejects.toThrow('only accepted guests can receive admission');
+    const replacement = await rsvp.reissueGuestCredential({ database: client, organizerProfileId: ids.organizerProfileId, guestId: accepted.guestId });
+    expect(replacement.admissionToken).toEqual(expect.any(String));
+    const delivery = await client.notificationJob.findFirstOrThrow({ where: { idempotencyKey: { startsWith: `guest:${accepted.guestId}:credential:` } }, select: { content: true } });
+    expect(delivery.content).toMatch(/^Your RSVP is confirmed\. Admission credential: eg1\./);
+    const deliveredCredential = delivery.content?.split('Admission credential: ')[1];
+    if (!deliveredCredential) throw new Error('delivery credential is unavailable');
+    await expect(rsvp.previewAdmission({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, token: accepted.admissionToken })).resolves.toEqual({ code: 'INVALID' });
+    await expect(rsvp.previewAdmission({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, token: replacement.admissionToken })).resolves.toEqual({ code: 'VALID', name: 'Recover me' });
+    await expect(rsvp.previewAdmission({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, token: deliveredCredential, ticketCredentialSecret: process.env.ADMISSION_TOKEN_SECRET })).resolves.toEqual({ code: 'VALID', name: 'Recover me' });
+  });
+
+  it('lists owned event guest lists with the identifiers and configuration needed to reopen them', async () => {
+    const rsvp = await loadRsvpAdmission();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(rsvp).toBeDefined();
+    if (!rsvp || !databaseUrl) throw new Error('RSVP admission is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const expiresAt = new Date('2032-01-01T12:00:00.000Z');
+    const list = await rsvp.createGuestList({
+      database: client,
+      organizerProfileId: ids.organizerProfileId,
+      eventId: ids.eventId,
+      name: 'Launch guests',
+      maxResponses: 50,
+      expiresAt,
+      categories: [{ name: 'General', isRestricted: false }, { name: 'VIP', isRestricted: true }],
+    });
+    await rsvp.addGuest({ database: client, organizerProfileId: ids.organizerProfileId, guestListId: list.id, name: 'First guest', email: 'manual@example.test', now: new Date() });
+
+    await expect(rsvp.listOwnedGuestLists({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId })).resolves.toEqual([{
+      id: list.id,
+      name: 'Launch guests',
+      isEnabled: true,
+      expiresAt,
+      maxResponses: 50,
+      responseCount: 1,
+      categories: [
+        { id: list.categories[0].id, name: 'General', isRestricted: false },
+        { id: list.categories[1].id, name: 'VIP', isRestricted: true },
+      ],
+    }]);
+    await expect(rsvp.listOwnedGuestLists({ database: client, organizerProfileId: randomUUID(), eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
   });
 
   it('allows exactly one organizer-owned gate confirmation for a guest credential', async () => {

@@ -15,6 +15,7 @@ type CreateCheckoutOrder = (input: {
   ticketSubtotalKobo: number;
   platformFeeKobo: number;
   totalKobo: number;
+  guestAccessToken?: string;
 }>;
 
 type FinalizePaidOrder = (input: {
@@ -105,6 +106,7 @@ describe('checkout order creation', () => {
       ticketSubtotalKobo: 0,
       platformFeeKobo: 0,
       totalKobo: 0,
+      guestAccessToken: expect.any(String),
     });
     const [order] = await client.$queryRaw<{ status: string }[]>`
       SELECT status::text FROM "order" WHERE id = ${ids.orderId}
@@ -153,6 +155,7 @@ describe('checkout order creation', () => {
       ticketSubtotalKobo: 1_000,
       platformFeeKobo: 500,
       totalKobo: 1_500,
+      guestAccessToken: expect.any(String),
     });
     const [order] = await client.$queryRaw<{ status: string }[]>`
       SELECT status::text FROM "order" WHERE id = ${ids.orderId}
@@ -273,3 +276,20 @@ async function createFreeEventFixture(
     VALUES (${ids.feeRuleId}, 900001, 'FIXED', 500, '2031-12-01T00:00:00.000Z', false, NOW())
   `;
 }
+
+describe('guest checkout account linking', () => {
+  it('uses a matching active profile id and leaves an unknown email unlinked', async () => {
+    const checkout = await import('../src/checkout/guest-checkout-account-link.js');
+
+    expect(checkout.guestCheckoutProfileId({ id: 'profile-1' })).toBe('profile-1');
+    expect(checkout.guestCheckoutProfileId(null)).toBeUndefined();
+  });
+
+  it('normalizes valid buyer email addresses and rejects malformed values', async () => {
+    const checkout = await import('../src/checkout/guest-checkout-account-link.js');
+
+    expect(checkout.normalizeBuyerEmail(' Buyer@Example.COM ')).toBe('buyer@example.com');
+    expect(checkout.normalizeBuyerEmail('not-an-email')).toBeNull();
+    expect(checkout.normalizeBuyerEmail('   ')).toBeNull();
+  });
+});

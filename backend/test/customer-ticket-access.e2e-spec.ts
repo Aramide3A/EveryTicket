@@ -5,12 +5,21 @@ type CustomerTicketAccess = {
   listCustomerOrders(input: {
     database: ReturnType<typeof createDatabaseClient>;
     customerProfileId: string;
-  }): Promise<Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>>;
+    status?: 'PENDING_PAYMENT' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION';
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>; page: number; pageSize: number; total: number; totalPages: number }>;
+  listCustomerTickets(input: {
+    database: ReturnType<typeof createDatabaseClient>;
+    customerProfileId: string;
+    admissionTokenSecret: string;
+  }): Promise<Array<{ id: string; ticketTypeName: string; orderReference: string; holderName: string; holderEmail: string; status: string; checkedIn: boolean; admissionCredential: string; event: { id: string; title: string; slug: string; startAt: Date; endAt: Date; venue: string; address: string; timeZone: string } }>>;
   getCustomerTicket(input: {
     database: ReturnType<typeof createDatabaseClient>;
     customerProfileId: string;
     ticketId: string;
-  }): Promise<{ id: string; ticketTypeName: string; orderReference: string } | null>;
+    admissionTokenSecret: string;
+  }): Promise<{ id: string; ticketTypeName: string; orderReference: string; holderName: string; holderEmail: string; status: string; checkedIn: boolean; admissionCredential: string; event: { id: string; title: string; slug: string; startAt: Date; endAt: Date; venue: string; address: string; timeZone: string } } | null>;
   getCustomerTicketDocument(input: {
     database: ReturnType<typeof createDatabaseClient>;
     customerProfileId: string;
@@ -35,6 +44,7 @@ async function loadCustomerTicketAccess(): Promise<CustomerTicketAccess | undefi
     const module = await import('../src/customer/customer-ticket-access.js');
     return {
       listCustomerOrders: module.listCustomerOrders,
+      listCustomerTickets: module.listCustomerTickets,
       getCustomerTicket: module.getCustomerTicket,
       getCustomerTicketDocument: module.getCustomerTicketDocument,
       getCustomerTicketDownload: module.getCustomerTicketDownload,
@@ -51,10 +61,10 @@ describe('customer ticket access', () => {
 
   afterEach(async () => {
     if (client) {
-      await client.$executeRaw`DELETE FROM notification_job WHERE "orderId" IN (${ids.customerOneOrderId ?? ''}, ${ids.customerTwoOrderId ?? ''})`;
+      await client.$executeRaw`DELETE FROM notification_job WHERE "orderId" IN (${ids.customerOneOrderId ?? ''}, ${ids.customerOnePendingOrderId ?? ''}, ${ids.customerTwoOrderId ?? ''})`;
       await client.$executeRaw`DELETE FROM ticket_document_job WHERE "ticketId" IN (${ids.customerOneTicketId ?? ''}, ${ids.customerTwoTicketId ?? ''})`;
       await client.$executeRaw`DELETE FROM ticket WHERE id IN (${ids.customerOneTicketId ?? ''}, ${ids.customerTwoTicketId ?? ''})`;
-      await client.$executeRaw`DELETE FROM "order" WHERE id IN (${ids.customerOneOrderId ?? ''}, ${ids.customerTwoOrderId ?? ''})`;
+      await client.$executeRaw`DELETE FROM "order" WHERE id IN (${ids.customerOneOrderId ?? ''}, ${ids.customerOnePendingOrderId ?? ''}, ${ids.customerTwoOrderId ?? ''})`;
       if (ids.feeRuleId) await client.$executeRaw`DELETE FROM platform_fee_rule WHERE id = ${ids.feeRuleId}`;
       if (ids.ticketTypeId) await client.$executeRaw`DELETE FROM ticket_type WHERE id = ${ids.ticketTypeId}`;
       if (ids.eventId) await client.$executeRaw`DELETE FROM event WHERE id = ${ids.eventId}`;
@@ -68,7 +78,7 @@ describe('customer ticket access', () => {
     client = undefined;
   });
 
-  it('lists only the authenticated customer’s paid orders and ticket summaries', async () => {
+  it('lists the authenticated customer’s paginated order history and filters by status', async () => {
     const customerTicketAccess = await loadCustomerTicketAccess();
     const databaseUrl = process.env.DATABASE_URL;
     expect(customerTicketAccess).toBeDefined();
@@ -78,18 +88,23 @@ describe('customer ticket access', () => {
     await client.$connect();
     await createFixture(client, ids);
 
-    await expect(
-      customerTicketAccess.listCustomerOrders({ database: client, customerProfileId: ids.customerOneProfileId }),
-    ).resolves.toEqual([
-      {
-        reference: 'customer-one-order',
-        status: 'PAID',
-        tickets: [{ id: ids.customerOneTicketId, ticketTypeName: 'General admission' }],
-      },
-    ]);
+    await expect(customerTicketAccess.listCustomerOrders({ database: client, customerProfileId: ids.customerOneProfileId, page: 1, pageSize: 1 })).resolves.toEqual({
+      items: [{ reference: 'customer-one-pending-order', status: 'PENDING_PAYMENT', tickets: [] }],
+      page: 1,
+      pageSize: 1,
+      total: 2,
+      totalPages: 2,
+    });
+    await expect(customerTicketAccess.listCustomerOrders({ database: client, customerProfileId: ids.customerOneProfileId, status: 'PAID', page: 1, pageSize: 20 })).resolves.toEqual({
+      items: [{ reference: 'customer-one-order', status: 'PAID', tickets: [{ id: ids.customerOneTicketId, ticketTypeName: 'General admission' }] }],
+      page: 1,
+      pageSize: 20,
+      total: 1,
+      totalPages: 1,
+    });
   });
 
-  it('does not disclose another customer’s ticket even when its identifier is known', async () => {
+  it('returns a rich admission-ready ticket only to its owning customer', async () => {
     const customerTicketAccess = await loadCustomerTicketAccess();
     const databaseUrl = process.env.DATABASE_URL;
     expect(customerTicketAccess).toBeDefined();
@@ -104,6 +119,7 @@ describe('customer ticket access', () => {
         database: client,
         customerProfileId: ids.customerOneProfileId,
         ticketId: ids.customerTwoTicketId,
+        admissionTokenSecret: 'ticket-contract-secret-that-is-long-enough',
       }),
     ).resolves.toBeNull();
     await expect(
@@ -111,12 +127,31 @@ describe('customer ticket access', () => {
         database: client,
         customerProfileId: ids.customerOneProfileId,
         ticketId: ids.customerOneTicketId,
+        admissionTokenSecret: 'ticket-contract-secret-that-is-long-enough',
       }),
     ).resolves.toEqual({
       id: ids.customerOneTicketId,
       ticketTypeName: 'General admission',
       orderReference: 'customer-one-order',
+      holderName: 'Customer one',
+      holderEmail: `${ids.customerOneTicketId}@example.test`,
+      status: 'ACTIVE',
+      checkedIn: false,
+      admissionCredential: 'et1.ticket-contract-id.AmP3tpgNmLyo908KwtavnwRbzKuAtIB0hmMqJPhjd-A',
+      event: {
+        id: ids.eventId,
+        title: 'Customer event',
+        slug: `customer-event-${ids.eventId}`,
+        startAt: new Date('2032-02-01T10:00:00.000Z'),
+        endAt: new Date('2032-02-01T12:00:00.000Z'),
+        venue: 'Venue',
+        address: 'Address',
+        timeZone: 'Africa/Lagos',
+      },
     });
+    await expect(customerTicketAccess.listCustomerTickets({ database: client, customerProfileId: ids.customerOneProfileId, admissionTokenSecret: 'ticket-contract-secret-that-is-long-enough' })).resolves.toEqual([
+      expect.objectContaining({ id: ids.customerOneTicketId, admissionCredential: 'et1.ticket-contract-id.AmP3tpgNmLyo908KwtavnwRbzKuAtIB0hmMqJPhjd-A' }),
+    ]);
     await expect(
       customerTicketAccess.getCustomerTicketDocument({
         database: client,
@@ -194,7 +229,7 @@ async function createFixture(client: ReturnType<typeof createDatabaseClient>, id
     organizerUserId: randomUUID(), organizerProfileId: randomUUID(), customerOneUserId: randomUUID(),
     customerOneProfileId: randomUUID(), customerTwoUserId: randomUUID(), customerTwoProfileId: randomUUID(),
     categoryId: randomUUID(), eventId: randomUUID(), ticketTypeId: randomUUID(), feeRuleId: randomUUID(),
-    customerOneOrderId: randomUUID(), customerTwoOrderId: randomUUID(), customerOneTicketId: randomUUID(), customerTwoTicketId: randomUUID(),
+    customerOneOrderId: randomUUID(), customerOnePendingOrderId: randomUUID(), customerTwoOrderId: randomUUID(), customerOneTicketId: 'ticket-contract-id', customerTwoTicketId: randomUUID(),
   });
   for (const [userId, name] of [[ids.organizerUserId, 'Organizer'], [ids.customerOneUserId, 'Customer one'], [ids.customerTwoUserId, 'Customer two']] as const) {
     await client.$executeRaw`INSERT INTO auth_user (id, name, email, "emailVerified", "createdAt", "updatedAt") VALUES (${userId}, ${name}, ${`${userId}@example.test`}, true, NOW(), NOW())`;
@@ -209,8 +244,10 @@ async function createFixture(client: ReturnType<typeof createDatabaseClient>, id
   for (const [orderId, profileId, reference, buyerName] of [[ids.customerOneOrderId, ids.customerOneProfileId, 'customer-one-order', 'Customer one'], [ids.customerTwoOrderId, ids.customerTwoProfileId, 'customer-two-order', 'Customer two']] as const) {
     await client.$executeRaw`INSERT INTO "order" (id, reference, "eventId", "customerProfileId", "buyerName", "buyerEmail", currency, "ticketSubtotalKobo", "platformFeeKobo", "totalKobo", "platformFeeRuleId", "platformFeeRuleVersion", "platformFeeMode", "platformFeeFixedAmountKobo", "holdExpiresAt", status, "paidAt", "createdAt") VALUES (${orderId}, ${reference}, ${ids.eventId}, ${profileId}, ${buyerName}, ${`${orderId}@example.test`}, 'NGN', 1000, 0, 1000, ${ids.feeRuleId}, 1, 'FIXED', 0, '2032-01-01T10:10:00.000Z', 'PAID', '2032-01-01T10:01:00.000Z', NOW())`;
   }
+  await client.$executeRaw`INSERT INTO "order" (id, reference, "eventId", "customerProfileId", "buyerName", "buyerEmail", currency, "ticketSubtotalKobo", "platformFeeKobo", "totalKobo", "platformFeeRuleId", "platformFeeRuleVersion", "platformFeeMode", "platformFeeFixedAmountKobo", "holdExpiresAt", status, "createdAt") VALUES (${ids.customerOnePendingOrderId}, 'customer-one-pending-order', ${ids.eventId}, ${ids.customerOneProfileId}, 'Customer one', ${`${ids.customerOnePendingOrderId}@example.test`}, 'NGN', 1000, 0, 1000, ${ids.feeRuleId}, 1, 'FIXED', 0, '2032-01-01T10:10:00.000Z', 'PENDING_PAYMENT', '2032-01-01T10:02:00.000Z')`;
   for (const [ticketId, orderId, name] of [[ids.customerOneTicketId, ids.customerOneOrderId, 'Customer one'], [ids.customerTwoTicketId, ids.customerTwoOrderId, 'Customer two']] as const) {
-    await client.$executeRaw`INSERT INTO ticket (id, "orderId", "eventId", "ticketTypeId", "holderName", "holderEmail", "ticketTypeName", "priceKobo", "admissionTokenDigest", "issuedAt") VALUES (${ticketId}, ${orderId}, ${ids.eventId}, ${ids.ticketTypeId}, ${name}, ${`${ticketId}@example.test`}, 'General admission', 1000, ${`digest-${ticketId}`}, NOW())`;
+    const digest = ticketId === ids.customerOneTicketId ? 'ticket-contract-digest' : `digest-${ticketId}`;
+    await client.$executeRaw`INSERT INTO ticket (id, "orderId", "eventId", "ticketTypeId", "holderName", "holderEmail", "ticketTypeName", "priceKobo", "admissionTokenDigest", "issuedAt") VALUES (${ticketId}, ${orderId}, ${ids.eventId}, ${ids.ticketTypeId}, ${name}, ${`${ticketId}@example.test`}, 'General admission', 1000, ${digest}, NOW())`;
   }
   await client.$executeRaw`INSERT INTO ticket_document_job (id, "ticketId", "objectKey", status, "createdAt", "updatedAt") VALUES (${randomUUID()}, ${ids.customerOneTicketId}, ${`tickets/${ids.customerOneTicketId}.pdf`}, 'PENDING', NOW(), NOW())`;
 }

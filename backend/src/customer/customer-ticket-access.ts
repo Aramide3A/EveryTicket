@@ -1,22 +1,40 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { randomUUID } from 'node:crypto';
+import { createTicketCredential } from '../worker/ticket-credential.js';
+
+export const customerOrderStatuses = ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const;
+export type CustomerOrderStatus = typeof customerOrderStatuses[number];
 
 export async function listCustomerOrders({
   database,
   customerProfileId,
+  status,
+  page = 1,
+  pageSize = 20,
 }: {
   database: PrismaClient;
   customerProfileId: string;
-}): Promise<Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>> {
-  return database.order.findMany({
-    where: { customerProfileId, status: 'PAID' },
-    orderBy: { createdAt: 'desc' },
-    select: {
-      reference: true,
-      status: true,
-      tickets: { select: { id: true, ticketTypeName: true }, orderBy: { issuedAt: 'asc' } },
-    },
-  });
+  status?: CustomerOrderStatus;
+  page?: number;
+  pageSize?: number;
+}): Promise<{ items: Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>; page: number; pageSize: number; total: number; totalPages: number }> {
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new RangeError('order history pagination is invalid');
+  const where = { customerProfileId, ...(status ? { status } : {}) };
+  const [items, total] = await Promise.all([
+    database.order.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        reference: true,
+        status: true,
+        tickets: { select: { id: true, ticketTypeName: true }, orderBy: { issuedAt: 'asc' } },
+      },
+    }),
+    database.order.count({ where }),
+  ]);
+  return { items, page, pageSize, total, totalPages: Math.ceil(total / pageSize) };
 }
 
 export async function getCustomerOrder({
@@ -44,34 +62,76 @@ export async function getCustomerOrder({
 export async function listCustomerTickets({
   database,
   customerProfileId,
+  admissionTokenSecret,
 }: {
   database: PrismaClient;
   customerProfileId: string;
-}): Promise<Array<{ id: string; ticketTypeName: string; orderReference: string }>> {
+  admissionTokenSecret: string;
+}): Promise<CustomerTicketView[]> {
   const tickets = await database.ticket.findMany({
     where: { order: { customerProfileId, status: 'PAID' } },
     orderBy: { issuedAt: 'desc' },
-    select: { id: true, ticketTypeName: true, order: { select: { reference: true } } },
+    select: customerTicketSelect,
   });
-  return tickets.map((ticket) => ({ id: ticket.id, ticketTypeName: ticket.ticketTypeName, orderReference: ticket.order.reference }));
+  return tickets.map((ticket) => customerTicketView(ticket, admissionTokenSecret));
 }
 
 export async function getCustomerTicket({
   database,
   customerProfileId,
   ticketId,
+  admissionTokenSecret,
 }: {
   database: PrismaClient;
   customerProfileId: string;
   ticketId: string;
-}): Promise<{ id: string; ticketTypeName: string; orderReference: string } | null> {
+  admissionTokenSecret: string;
+}): Promise<CustomerTicketView | null> {
   const ticket = await database.ticket.findFirst({
     where: { id: ticketId, order: { customerProfileId, status: 'PAID' } },
-    select: { id: true, ticketTypeName: true, order: { select: { reference: true } } },
+    select: customerTicketSelect,
   });
-  return ticket
-    ? { id: ticket.id, ticketTypeName: ticket.ticketTypeName, orderReference: ticket.order.reference }
-    : null;
+  return ticket ? customerTicketView(ticket, admissionTokenSecret) : null;
+}
+
+const customerTicketSelect = {
+  id: true,
+  ticketTypeName: true,
+  holderName: true,
+  holderEmail: true,
+  status: true,
+  admissionTokenDigest: true,
+  checkIn: { select: { id: true } },
+  order: { select: { reference: true } },
+  event: { select: { id: true, title: true, slug: true, startAt: true, endAt: true, venue: true, address: true, timeZone: true } },
+} as const;
+
+type CustomerTicketRecord = {
+  id: string;
+  ticketTypeName: string;
+  holderName: string;
+  holderEmail: string;
+  status: string;
+  admissionTokenDigest: string;
+  checkIn: { id: string } | null;
+  order: { reference: string };
+  event: { id: string; title: string; slug: string; startAt: Date; endAt: Date; venue: string; address: string; timeZone: string };
+};
+
+type CustomerTicketView = Omit<CustomerTicketRecord, 'admissionTokenDigest' | 'checkIn' | 'order'> & { orderReference: string; checkedIn: boolean; admissionCredential: string };
+
+function customerTicketView(ticket: CustomerTicketRecord, admissionTokenSecret: string): CustomerTicketView {
+  return {
+    id: ticket.id,
+    ticketTypeName: ticket.ticketTypeName,
+    holderName: ticket.holderName,
+    holderEmail: ticket.holderEmail,
+    status: ticket.status,
+    event: ticket.event,
+    orderReference: ticket.order.reference,
+    checkedIn: ticket.checkIn !== null,
+    admissionCredential: createTicketCredential({ ticketId: ticket.id, admissionTokenDigest: ticket.admissionTokenDigest, secret: admissionTokenSecret }),
+  };
 }
 
 export async function getCustomerTicketDocument({

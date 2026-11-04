@@ -80,7 +80,7 @@ export async function listPublicEvents({
   sort?: 'upcoming' | 'featured' | 'popular';
   page?: number;
   now?: Date;
-}): Promise<{ items: Array<{ slug: string; title: string; availableTickets: number }>; page: number; total: number }> {
+}): Promise<{ items: Array<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string; isCover: boolean }>; availableTickets: number }>; page: number; total: number }> {
   if (!Number.isSafeInteger(page) || page < 1) throw new RangeError('page is invalid');
   if (!['upcoming', 'featured', 'popular'].includes(sort)) throw new RangeError('event sort is invalid');
   const where = {
@@ -104,8 +104,18 @@ export async function listPublicEvents({
       skip: (page - 1) * 20,
       take: 20,
       select: {
+        id: true,
         slug: true,
         title: true,
+        description: true,
+        city: true,
+        state: true,
+        venue: true,
+        startAt: true,
+        endAt: true,
+        category: { select: { name: true, slug: true } },
+        organizer: { select: { user: { select: { name: true } } } },
+        media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } },
         ticketTypes: {
           where: { isActive: true },
           select: {
@@ -120,8 +130,18 @@ export async function listPublicEvents({
   ]);
   return {
     items: items.map((event) => ({
+      id: event.id,
       slug: event.slug,
       title: event.title,
+      description: event.description,
+      city: event.city,
+      state: event.state,
+      venue: event.venue,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      category: event.category,
+      organizer: { name: event.organizer.user.name },
+      media: event.media,
       availableTickets: event.ticketTypes.reduce((totalAvailable, ticketType) => totalAvailable + Math.max(0, ticketType.capacity - ticketType.tickets.length - ticketType.holds.reduce((sum, hold) => sum + hold.quantity, 0)), 0),
     })),
     page,
@@ -137,17 +157,34 @@ export async function getPublicEvent({
   database: PrismaClient;
   slug: string;
   now?: Date;
-}): Promise<{ slug: string; title: string; ticketTypes: Array<{ name: string; priceKobo: number; availableTickets: number }> } | null> {
+}): Promise<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; address: string; timeZone: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string; isCover: boolean }>; ticketTypes: Array<{ id: string; name: string; description: string | null; priceKobo: number; salesStartAt: Date | null; salesEndAt: Date | null; maxPerOrder: number | null; availableTickets: number }> } | null> {
   const event = await database.event.findFirst({
     where: { slug, status: 'PUBLISHED', organizer: { status: 'ACTIVE' }, startAt: { gt: now } },
-    select: { slug: true, title: true, ticketTypes: { where: { isActive: true }, orderBy: { priceKobo: 'asc' }, select: { name: true, priceKobo: true, capacity: true, tickets: { where: { status: 'ACTIVE' }, select: { id: true } }, holds: { where: { expiresAt: { gt: now } }, select: { quantity: true } } } } },
+    select: { id: true, slug: true, title: true, description: true, city: true, state: true, venue: true, address: true, timeZone: true, startAt: true, endAt: true, category: { select: { name: true, slug: true } }, organizer: { select: { user: { select: { name: true } } } }, media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } }, ticketTypes: { where: { isActive: true }, orderBy: { priceKobo: 'asc' }, select: { id: true, name: true, description: true, priceKobo: true, salesStartAt: true, salesEndAt: true, maxPerOrder: true, capacity: true, tickets: { where: { status: 'ACTIVE' }, select: { id: true } }, holds: { where: { expiresAt: { gt: now } }, select: { quantity: true } } } } },
   });
   return event ? {
+    id: event.id,
     slug: event.slug,
     title: event.title,
+    description: event.description,
+    city: event.city,
+    state: event.state,
+    venue: event.venue,
+    address: event.address,
+    timeZone: event.timeZone,
+    startAt: event.startAt,
+    endAt: event.endAt,
+    category: event.category,
+    organizer: { name: event.organizer.user.name },
+    media: event.media,
     ticketTypes: event.ticketTypes.map((ticketType) => ({
+      id: ticketType.id,
       name: ticketType.name,
+      description: ticketType.description,
       priceKobo: ticketType.priceKobo,
+      salesStartAt: ticketType.salesStartAt,
+      salesEndAt: ticketType.salesEndAt,
+      maxPerOrder: ticketType.maxPerOrder,
       availableTickets: Math.max(0, ticketType.capacity - ticketType.tickets.length - ticketType.holds.reduce((sum, hold) => sum + hold.quantity, 0)),
     })),
   } : null;

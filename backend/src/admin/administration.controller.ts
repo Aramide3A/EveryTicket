@@ -1,9 +1,11 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, ServiceUnavailableException } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
+import { readPagination } from '../common/http/pagination.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
-import { approvePayoutRequest, approveRefundRequest, blockProfile, getActivePlatformFeeRule, getAdministrationSummary, listAdministrationEvents, listAdministrationOrders, listAdministrationPayoutRequests, listAdministrationProfiles, listAdministrationRefundRequests, markPayoutPaid, markRefundProcessed, rejectPayoutRequest, rejectRefundRequest, replacePlatformFeeRule, restoreEvent, setEventFeatured, suspendEvent, unblockProfile } from './administration.js';
+import { createPaystackGateway } from '../payments/paystack-gateway.js';
+import { approvePayoutRequest, approveRefundRequest, blockProfile, executeApprovedRefund, getActivePlatformFeeRule, getAdministrationSummary, markPayoutPaid, markRefundProcessed, pageAdministrationEvents, pageAdministrationOrders, pageAdministrationPayoutRequests, pageAdministrationProfiles, pageAdministrationRefundRequests, reconcileExecutedRefund, rejectPayoutRequest, rejectRefundRequest, replacePlatformFeeRule, restoreEvent, setEventFeatured, suspendEvent, unblockProfile } from './administration.js';
 
 const runAdministrationDatabaseOperation = createDatabaseOperation('administration is not configured');
 
@@ -19,10 +21,10 @@ export class AdministrationController {
   }
 
   @Get('events')
-  async events(@Req() request: Request, @Query('state') state?: string) {
+  async events(@Req() request: Request, @Query('state') state?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
     if (state && !['DRAFT', 'PUBLISHED', 'SUSPENDED', 'CANCELLED'].includes(state)) throw new BadRequestException('state is invalid');
-    return this.withDatabase((database) => listAdministrationEvents({ database, adminProfileId: profile.id, state: state as 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED' | undefined }));
+    return this.withDatabase((database) => pageAdministrationEvents({ database, adminProfileId: profile.id, state: state as 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED' | undefined, ...readPagination(page, pageSize) }));
   }
 
   @Post('events/:eventId/suspend')
@@ -47,9 +49,9 @@ export class AdministrationController {
   }
 
   @Get('users')
-  async users(@Req() request: Request, @Query('q') query?: string) {
+  async users(@Req() request: Request, @Query('q') query?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
-    return this.withDatabase((database) => listAdministrationProfiles({ database, adminProfileId: profile.id, query }));
+    return this.withDatabase((database) => pageAdministrationProfiles({ database, adminProfileId: profile.id, query, ...readPagination(page, pageSize) }));
   }
 
   @Post('users/:profileId/block')
@@ -67,15 +69,15 @@ export class AdministrationController {
   }
 
   @Get('orders')
-  async orders(@Req() request: Request, @Query('q') query?: string) {
+  async orders(@Req() request: Request, @Query('q') query?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
-    return this.withDatabase((database) => listAdministrationOrders({ database, adminProfileId: profile.id, query }));
+    return this.withDatabase((database) => pageAdministrationOrders({ database, adminProfileId: profile.id, query, status: readOptionalEnum(status, ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const), ...readPagination(page, pageSize) }));
   }
 
   @Get('refund-requests')
-  async refunds(@Req() request: Request) {
+  async refunds(@Req() request: Request, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
-    return this.withDatabase((database) => listAdministrationRefundRequests({ database, adminProfileId: profile.id }));
+    return this.withDatabase((database) => pageAdministrationRefundRequests({ database, adminProfileId: profile.id, status: readOptionalEnum(status, ['REQUESTED', 'APPROVED', 'REJECTED', 'PROCESSING', 'PROCESSED', 'FAILED', 'CANCELLED'] as const), ...readPagination(page, pageSize) }));
   }
 
   @Post('refund-requests/:refundRequestId/approve')
@@ -99,10 +101,22 @@ export class AdministrationController {
     return { processed: true };
   }
 
-  @Get('payout-requests')
-  async payouts(@Req() request: Request) {
+  @Post('refund-requests/:refundRequestId/execute')
+  async executeRefund(@Req() request: Request, @Param('refundRequestId') refundRequestId: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
-    return this.withDatabase((database) => listAdministrationPayoutRequests({ database, adminProfileId: profile.id }));
+    return this.withDatabase((database) => executeApprovedRefund({ database, adminProfileId: profile.id, refundRequestId, gateway: configuredPaystackGateway(), now: new Date() }));
+  }
+
+  @Post('refund-requests/:refundRequestId/reconcile')
+  async reconcileRefund(@Req() request: Request, @Param('refundRequestId') refundRequestId: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => reconcileExecutedRefund({ database, adminProfileId: profile.id, refundRequestId, gateway: configuredPaystackGateway(), now: new Date() }));
+  }
+
+  @Get('payout-requests')
+  async payouts(@Req() request: Request, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => pageAdministrationPayoutRequests({ database, adminProfileId: profile.id, status: readOptionalEnum(status, ['REQUESTED', 'APPROVED', 'REJECTED', 'PAID', 'CANCELLED'] as const), ...readPagination(page, pageSize) }));
   }
 
   @Post('payout-requests/:payoutRequestId/approve')
@@ -143,6 +157,12 @@ export class AdministrationController {
 
 }
 
+function configuredPaystackGateway() {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY;
+  if (!secretKey) throw new ServiceUnavailableException('payments are not configured');
+  return createPaystackGateway({ secretKey });
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null) throw new BadRequestException('request body is invalid');
   return value as Record<string, unknown>;
@@ -177,4 +197,10 @@ function readDate(body: unknown, field: string): Date {
   const date = typeof value === 'string' ? new Date(value) : new Date(NaN);
   if (Number.isNaN(date.getTime())) throw new BadRequestException(`${field} is invalid`);
   return date;
+}
+
+function readOptionalEnum<const T extends readonly string[]>(value: string | undefined, values: T): T[number] | undefined {
+  if (value === undefined) return undefined;
+  if (!values.includes(value)) throw new BadRequestException('filter is invalid');
+  return value as T[number];
 }

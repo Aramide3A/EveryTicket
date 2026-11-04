@@ -62,4 +62,31 @@ describe('authenticated administration HTTP contract', () => {
       payoutLiabilityKobo: expect.any(Number),
     }));
   });
+
+  it('bounds every growing administration collection with page metadata', async () => {
+    const server = app?.getHttpServer();
+    for (const path of ['users', 'events', 'orders', 'refund-requests', 'payout-requests']) {
+      const response = await request(server).get(`/api/v1/admin/${path}?page=1&pageSize=1`).set('Cookie', cookie).expect(200);
+      expect(response.body).toEqual({ items: expect.any(Array), page: 1, pageSize: 1, total: expect.any(Number) });
+      expect(response.body.items.length).toBeLessThanOrEqual(1);
+    }
+    await request(server).get('/api/v1/admin/users?page=1&pageSize=101').set('Cookie', cookie).expect(400);
+    await request(server).get('/api/v1/admin/refund-requests?status=UNKNOWN').set('Cookie', cookie).expect(400);
+  });
+
+  it('exposes provider refund execution only when Paystack is configured', async () => {
+    const originalSecret = process.env.PAYSTACK_SECRET_KEY;
+    delete process.env.PAYSTACK_SECRET_KEY;
+    try {
+      for (const action of ['execute', 'reconcile']) {
+        await request(app?.getHttpServer())
+          .post(`/api/v1/admin/refund-requests/refund-not-found/${action}`)
+          .set('Cookie', cookie)
+          .expect(503);
+      }
+    } finally {
+      if (originalSecret === undefined) delete process.env.PAYSTACK_SECRET_KEY;
+      else process.env.PAYSTACK_SECRET_KEY = originalSecret;
+    }
+  });
 });

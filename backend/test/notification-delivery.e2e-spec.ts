@@ -7,6 +7,7 @@ type NotificationDelivery = {
     now: Date;
     maxAttempts: number;
   }): Promise<{ sent: number; retried: number; failed: number }>;
+  notificationMessage(input: { type: 'ORDER_CONFIRMATION' | 'RSVP_CONFIRMATION' | 'REFUND_DECISION' | 'PAYOUT_DECISION'; to: string; content?: string | null }): { to: string; subject: string; text: string };
 };
 
 async function loadNotificationDelivery(): Promise<NotificationDelivery | undefined> {
@@ -20,6 +21,19 @@ async function loadNotificationDelivery(): Promise<NotificationDelivery | undefi
 describe('notification delivery outbox', () => {
   let client: ReturnType<typeof createDatabaseClient> | undefined;
   let jobIds: string[] = [];
+
+  it('uses stored signed RSVP delivery content when present', async () => {
+    const delivery = await loadNotificationDelivery();
+    expect(delivery).toBeDefined();
+    if (!delivery) throw new Error('notification delivery is unavailable');
+    const content = 'Your RSVP is confirmed. Admission credential: eg1.guest_123.signature';
+
+    expect(delivery.notificationMessage({ type: 'RSVP_CONFIRMATION', to: 'guest@example.test', content })).toEqual({
+      to: 'guest@example.test',
+      subject: 'Your EverythingTicket RSVP',
+      text: content,
+    });
+  });
 
   afterEach(async () => {
     if (client) {

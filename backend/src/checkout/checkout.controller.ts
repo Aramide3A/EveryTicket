@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   NotFoundException,
   Param,
   Post,
@@ -17,6 +18,7 @@ import { getCustomerOrderStatus } from './order-status.js';
 import { initializePayment } from '../payments/payment-lifecycle.js';
 import { createPaystackGateway } from '../payments/paystack-gateway.js';
 import { guestCheckoutProfileId, normalizeBuyerEmail } from './guest-checkout-account-link.js';
+import { getGuestOrder, getGuestTicketDownload } from './guest-order-access.js';
 
 @ApiTags('Checkout')
 @Controller('orders')
@@ -87,6 +89,22 @@ export class CheckoutController {
     });
     if (!status) throw new NotFoundException('order was not found');
     return status;
+  }
+
+  @Get(':orderReference/guest')
+  async guestOrder(@Param('orderReference') orderReference: string, @Headers('x-guest-access-token') accessToken = '') {
+    const order = await withDatabase({ unavailableMessage: 'checkout is not configured', callback: (database) => getGuestOrder({ database, orderReference, accessToken }) });
+    if (!order) throw new NotFoundException('guest order was not found');
+    return order;
+  }
+
+  @Get(':orderReference/tickets/:ticketId/download')
+  async guestTicketDownload(@Param('orderReference') orderReference: string, @Param('ticketId') ticketId: string, @Headers('x-guest-access-token') accessToken = '') {
+    const [{ createR2ObjectStore }, { readR2Config }] = await Promise.all([import('../worker/r2-object-store.js'), import('../worker/worker-config.js')]);
+    const objectStore = createR2ObjectStore({ config: readR2Config(process.env) });
+    const download = await withDatabase({ unavailableMessage: 'checkout is not configured', callback: (database) => getGuestTicketDownload({ database, orderReference, ticketId, accessToken, createDownloadUrl: (objectKey) => objectStore.createPrivateDownloadUrl({ objectKey }) }) });
+    if (!download) throw new NotFoundException('guest ticket document was not found');
+    return download;
   }
 }
 

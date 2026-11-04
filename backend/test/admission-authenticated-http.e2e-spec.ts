@@ -35,7 +35,10 @@ describe('authenticated RSVP HTTP contracts', () => {
 
   afterEach(async () => {
     if (client) {
+      await client.$executeRaw`DELETE FROM notification_job WHERE "recipientEmail" IN ('declining@example.test', 'recover-http@example.test')`;
       if (ids.eventId) {
+        await client.$executeRaw`DELETE FROM guest WHERE "guestListId" IN (SELECT id FROM guest_list WHERE "eventId" = ${ids.eventId})`;
+        await client.$executeRaw`DELETE FROM rsvp_link WHERE "guestListId" IN (SELECT id FROM guest_list WHERE "eventId" = ${ids.eventId})`;
         await client.$executeRaw`DELETE FROM guest_category WHERE "guestListId" IN (SELECT id FROM guest_list WHERE "eventId" = ${ids.eventId})`;
         await client.$executeRaw`DELETE FROM guest_list WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM event WHERE id = ${ids.eventId}`;
@@ -77,5 +80,60 @@ describe('authenticated RSVP HTTP contracts', () => {
         { id: expect.any(String), name: 'VIP', isRestricted: true },
       ],
     });
+  });
+
+  it('lets the authenticated owner reopen event guest lists with stable identifiers', async () => {
+    const created = await request(app?.getHttpServer())
+      .post(`/api/v1/organizer/events/${ids.eventId}/guest-lists`)
+      .set('Cookie', cookie)
+      .send({ name: 'Reopen me', categories: [{ name: 'VIP', isRestricted: true }] })
+      .expect(201);
+
+    const response = await request(app?.getHttpServer())
+      .get(`/api/v1/organizer/events/${ids.eventId}/guest-lists`)
+      .set('Cookie', cookie)
+      .expect(200);
+
+    expect(response.body).toEqual([expect.objectContaining({
+      id: created.body.id,
+      name: 'Reopen me',
+      responseCount: 0,
+      categories: [{ id: created.body.categories[0].id, name: 'VIP', isRestricted: true }],
+    })]);
+  });
+
+  it('records an explicit public RSVP decline without issuing admission', async () => {
+    const list = await request(app?.getHttpServer())
+      .post(`/api/v1/organizer/events/${ids.eventId}/guest-lists`)
+      .set('Cookie', cookie)
+      .send({ name: 'Public decisions' })
+      .expect(201);
+    const link = await request(app?.getHttpServer())
+      .post(`/api/v1/organizer/guest-lists/${list.body.id}/links`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+
+    const response = await request(app?.getHttpServer())
+      .post(`/api/v1/rsvp/${link.body.token}/responses`)
+      .send({ idempotencyKey: 'http-decline', name: 'Declining guest', email: 'declining@example.test', responseStatus: 'DECLINED' })
+      .expect(201);
+
+    expect(response.body).toEqual({ guestId: expect.any(String), responseStatus: 'DECLINED', categoryId: null });
+    await expect(client?.guest.findUniqueOrThrow({ where: { id: response.body.guestId }, select: { responseStatus: true, admissionTokenDigest: true } })).resolves.toEqual({ responseStatus: 'DECLINED', admissionTokenDigest: null });
+  });
+
+  it('lets the authenticated owner reissue an accepted guest credential', async () => {
+    const list = await request(app?.getHttpServer()).post(`/api/v1/organizer/events/${ids.eventId}/guest-lists`).set('Cookie', cookie).send({ name: 'Recovery' }).expect(201);
+    const link = await request(app?.getHttpServer()).post(`/api/v1/organizer/guest-lists/${list.body.id}/links`).set('Cookie', cookie).send({}).expect(201);
+    const guest = await request(app?.getHttpServer()).post(`/api/v1/rsvp/${link.body.token}/responses`).send({ idempotencyKey: 'http-recovery', name: 'Recover me', email: 'recover-http@example.test', responseStatus: 'ACCEPTED' }).expect(201);
+
+    const response = await request(app?.getHttpServer())
+      .post(`/api/v1/organizer/guests/${guest.body.guestId}/credential/reissue`)
+      .set('Cookie', cookie)
+      .expect(201);
+
+    expect(response.body).toEqual({ admissionToken: expect.any(String) });
+    expect(response.body.admissionToken).not.toBe(guest.body.admissionToken);
   });
 });

@@ -124,6 +124,8 @@
       {"name":"GET Refund requests","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/refund-requests"}},
       {"name":"POST Approve refund","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/approve","body":{"mode":"raw","raw":"{\"ticketRefundKobo\":500000,\"platformFeeRefundKobo\":5000,\"reason\":\"Approved\"}"}}},
       {"name":"POST Reject refund","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/reject","body":{"mode":"raw","raw":"{\"reason\":\"Insufficient evidence\"}"}}},
+      {"name":"POST Execute approved Paystack refund","request":{"method":"POST","description":"Claims an approved refund once and submits its exact approved amount to Paystack. Returns the provider refund reference and initial status.","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/execute"}},
+      {"name":"POST Reconcile Paystack refund","request":{"method":"POST","description":"Retrieves the authoritative Paystack refund status. Tickets are revoked only when Paystack reports processed.","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/reconcile"}},
       {"name":"POST Mark refund processed","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/refund-requests/{{refundRequestId}}/mark-processed","body":{"mode":"raw","raw":"{\"gatewayRefundReference\":\"refund-001\",\"gatewayStatus\":\"success\"}"}}},
       {"name":"GET Payout requests","request":{"method":"GET","url":"{{apiBaseUrl}}/admin/payout-requests"}},
       {"name":"POST Approve payout","request":{"method":"POST","url":"{{apiBaseUrl}}/admin/payout-requests/{{payoutRequestId}}/approve","body":{"mode":"raw","raw":"{\"reason\":\"Approved after reconciliation\"}"}}},

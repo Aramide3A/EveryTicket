@@ -13,6 +13,7 @@ type AuthOptions = {
   trustedOrigins?: string[];
   requireEmailVerification?: boolean;
   sendVerificationEmail?: (input: { user: { email: string }; url: string }) => Promise<void>;
+  sendResetPassword?: (input: { user: { email: string }; url: string; token: string }) => Promise<void>;
 };
 
 export function createAuth({
@@ -23,6 +24,7 @@ export function createAuth({
   trustedOrigins,
   requireEmailVerification = false,
   sendVerificationEmail,
+  sendResetPassword,
 }: AuthOptions) {
   const database = databaseClient ?? createDatabaseClient(databaseUrl);
 
@@ -37,6 +39,8 @@ export function createAuth({
     emailAndPassword: {
       enabled: true,
       requireEmailVerification,
+      sendResetPassword,
+      revokeSessionsOnPasswordReset: true,
     },
     emailVerification: {
       sendOnSignUp: requireEmailVerification,
@@ -100,6 +104,11 @@ export const auth = createAuth({
     to: user.email,
     subject: 'Verify your EverythingTicket email',
     text: `Verify your email address to access your EverythingTicket account: ${url}`,
+  }) : undefined,
+  sendResetPassword: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
+    to: user.email,
+    subject: 'Reset your EverythingTicket password',
+    text: `Reset your EverythingTicket password using this secure link: ${url}`,
   }) : undefined,
   trustedOrigins: process.env.PUBLIC_APP_URL
     ? [process.env.PUBLIC_APP_URL]

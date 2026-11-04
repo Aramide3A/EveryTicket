@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { assertEventCheckoutEligibility } from './checkout-eligibility.js';
 import { calculateCheckoutQuote } from './quote.js';
@@ -29,6 +29,7 @@ export async function createCheckoutOrder({
   ticketSubtotalKobo: number;
   platformFeeKobo: number;
   totalKobo: number;
+  guestAccessToken?: string;
 }> {
   if (!reference || !buyer.name || !buyer.email || items.length === 0) {
     throw new RangeError('reference, buyer details, and ticket items are required');
@@ -117,9 +118,11 @@ export async function createCheckoutOrder({
       }
     }
 
+    const guestAccessToken = customerProfileId ? undefined : randomBytes(32).toString('base64url');
     const order = await transaction.order.create({
       data: {
         reference, eventId, customerProfileId, buyerName: buyer.name, buyerEmail: buyer.email, buyerPhone: buyer.phone,
+        guestAccessTokenDigest: guestAccessToken ? createHash('sha256').update(guestAccessToken).digest('hex') : null,
         ticketSubtotalKobo: quote.ticketSubtotalKobo, platformFeeKobo: quote.platformFeeKobo, totalKobo: quote.totalKobo,
         platformFeeRuleId: feeRule.id, platformFeeRuleVersion: feeRule.version, platformFeeMode: feeRule.mode,
         platformFeePercentageBasisPoints: feeRule.percentageBasisPoints, platformFeeFixedAmountKobo: feeRule.fixedAmountKobo,
@@ -141,7 +144,7 @@ export async function createCheckoutOrder({
           expiresAt: holdExpiresAt,
         })),
       });
-      return { reference, status: 'PENDING_PAYMENT' as const, ...quote };
+      return { reference, status: 'PENDING_PAYMENT' as const, ...quote, ...(guestAccessToken ? { guestAccessToken } : {}) };
     }
 
     const tickets = items.flatMap((item) => {
@@ -166,6 +169,6 @@ export async function createCheckoutOrder({
       },
     });
     await transaction.order.update({ where: { id: order.id }, data: { status: 'PAID', paidAt: now } });
-    return { reference, status: 'PAID' as const, ...quote };
+    return { reference, status: 'PAID' as const, ...quote, ...(guestAccessToken ? { guestAccessToken } : {}) };
   });
 }

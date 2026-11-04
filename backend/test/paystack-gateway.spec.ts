@@ -18,6 +18,24 @@ type PaystackGatewayFactory = (input: {
     currency: string;
     paidAt?: Date;
   }>;
+  createRefund(input: {
+    transactionReference: string;
+    amountKobo: number;
+    currency: string;
+    customerNote: string;
+    merchantNote: string;
+  }): Promise<{
+    reference: string;
+    status: 'pending' | 'processing' | 'needs-attention' | 'failed' | 'processed';
+    amountKobo: number;
+    currency: string;
+  }>;
+  fetchRefund(reference: string): Promise<{
+    reference: string;
+    status: 'pending' | 'processing' | 'needs-attention' | 'failed' | 'processed';
+    amountKobo: number;
+    currency: string;
+  }>;
 };
 
 async function loadPaystackGatewayFactory(): Promise<PaystackGatewayFactory | undefined> {
@@ -99,6 +117,66 @@ describe('Paystack gateway client', () => {
     });
     expect(fetchFn).toHaveBeenCalledWith(
       'https://api.paystack.co/transaction/verify/pay-ref-2',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer sk_test_example' }) }),
+    );
+  });
+
+  it('initiates an exact partial refund against the successful transaction reference', async () => {
+    const createPaystackGateway = await loadPaystackGatewayFactory();
+    const fetchFn = jest.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: true,
+          data: { id: 3018284, status: 'pending', amount: 2_100, currency: 'NGN' },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    expect(createPaystackGateway).toBeDefined();
+    const result = await createPaystackGateway?.({ secretKey: 'sk_test_example', fetchFn })
+      .createRefund({
+        transactionReference: 'pay-ref-paid',
+        amountKobo: 2_100,
+        currency: 'NGN',
+        customerNote: 'Approved customer refund',
+        merchantNote: 'EverythingTicket refund refund-request-1',
+      });
+
+    expect(result).toEqual({ reference: '3018284', status: 'pending', amountKobo: 2_100, currency: 'NGN' });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.paystack.co/refund',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Authorization: 'Bearer sk_test_example' }),
+        body: JSON.stringify({
+          transaction: 'pay-ref-paid',
+          amount: 2_100,
+          currency: 'NGN',
+          customer_note: 'Approved customer refund',
+          merchant_note: 'EverythingTicket refund refund-request-1',
+        }),
+      }),
+    );
+  });
+
+  it('retrieves the authoritative refund status by provider refund identifier', async () => {
+    const createPaystackGateway = await loadPaystackGatewayFactory();
+    const fetchFn = jest.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: true,
+          data: { id: 3018284, status: 'processed', amount: 2_100, currency: 'NGN' },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    expect(createPaystackGateway).toBeDefined();
+    await expect(createPaystackGateway?.({ secretKey: 'sk_test_example', fetchFn }).fetchRefund('3018284'))
+      .resolves.toEqual({ reference: '3018284', status: 'processed', amountKobo: 2_100, currency: 'NGN' });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.paystack.co/refund/3018284',
       expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer sk_test_example' }) }),
     );
   });

@@ -196,6 +196,8 @@ describe('GET /health/live', () => {
       '/api/v1/admin/refund-requests',
       '/api/v1/admin/refund-requests/{refundRequestId}/approve',
       '/api/v1/admin/refund-requests/{refundRequestId}/reject',
+      '/api/v1/admin/refund-requests/{refundRequestId}/execute',
+      '/api/v1/admin/refund-requests/{refundRequestId}/reconcile',
       '/api/v1/admin/refund-requests/{refundRequestId}/mark-processed',
       '/api/v1/admin/payout-requests',
       '/api/v1/admin/payout-requests/{payoutRequestId}/approve',
@@ -264,6 +266,8 @@ describe('GET /health/live', () => {
       ['/api/v1/admin/refund-requests', 'get'],
       ['/api/v1/admin/refund-requests/{refundRequestId}/approve', 'post'],
       ['/api/v1/admin/refund-requests/{refundRequestId}/reject', 'post'],
+      ['/api/v1/admin/refund-requests/{refundRequestId}/execute', 'post'],
+      ['/api/v1/admin/refund-requests/{refundRequestId}/reconcile', 'post'],
       ['/api/v1/admin/refund-requests/{refundRequestId}/mark-processed', 'post'],
       ['/api/v1/admin/payout-requests', 'get'],
       ['/api/v1/admin/payout-requests/{payoutRequestId}/approve', 'post'],
@@ -289,5 +293,14 @@ describe('GET /health/live', () => {
     }
     expect((paths['/api/v1/rsvp/{token}'] as Record<string, { security?: unknown }>).get.security).toBeUndefined();
     expect((paths['/api/v1/rsvp/{token}/responses'] as Record<string, { security?: unknown }>).post.security).toBeUndefined();
+  });
+});
+
+describe('readiness checks', () => {
+  it('reports ready only when both durable database and queue Redis dependencies respond', async () => {
+    const readiness = await import('../src/health/readiness.js');
+
+    await expect(readiness.checkReadiness({ databaseCheck: async () => undefined, redisCheck: async () => undefined })).resolves.toEqual({ status: 'ok', checks: { database: 'ok', redis: 'ok' } });
+    await expect(readiness.checkReadiness({ databaseCheck: async () => undefined, redisCheck: async () => { throw new Error('unavailable'); } })).resolves.toEqual({ status: 'error', checks: { database: 'ok', redis: 'error' } });
   });
 });

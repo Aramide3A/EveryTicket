@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
 import { createOwnedEvent, createOwnedTicketType, getPublicEvent, listPublicEvents, publishOwnedEvent, removeOwnedTicketType, unpublishOwnedEvent, updateOwnedEvent, updateOwnedTicketType } from './event-catalogue.js';
+import { cancelOwnedEvent, removeOwnedEvent } from './event-lifecycle.js';
 
 const runEventDatabaseOperation = createDatabaseOperation('event catalogue is not configured');
 
@@ -43,7 +44,7 @@ export class EventController {
   @Get('categories')
   @ApiOperation({ summary: 'List public event categories' })
   async categories() {
-    return runEventDatabaseOperation((database) => database.eventCategory.findMany({ orderBy: { name: 'asc' }, select: { name: true, slug: true } }));
+    return runEventDatabaseOperation((database) => database.eventCategory.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, slug: true } }));
   }
 
   @Get('events')
@@ -73,6 +74,23 @@ export class EventController {
     const profile = await requireActiveProfile(request, 'ORGANIZER');
     await runEventDatabaseOperation((database) => unpublishOwnedEvent({ database, organizerProfileId: profile.id, eventId }));
     return { unpublished: true };
+  }
+
+  @Post('organizer/events/:eventId/cancel')
+  @ApiBearerAuth('session')
+  async cancel(@Req() request: Request, @Param('eventId') eventId: string, @Body() body: unknown) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    const reason = readStringValue(readObject(body, 'cancellation reason is required'), 'reason');
+    await runEventDatabaseOperation((database) => cancelOwnedEvent({ database, organizerProfileId: profile.id, eventId, reason, now: new Date() }));
+    return { cancelled: true };
+  }
+
+  @Delete('organizer/events/:eventId')
+  @ApiBearerAuth('session')
+  async remove(@Req() request: Request, @Param('eventId') eventId: string) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    await runEventDatabaseOperation((database) => removeOwnedEvent({ database, organizerProfileId: profile.id, eventId }));
+    return { removed: true };
   }
 
   @Post('organizer/events/:eventId/ticket-types')

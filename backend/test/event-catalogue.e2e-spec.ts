@@ -3,8 +3,8 @@ import { createDatabaseClient } from '../src/persistence/prisma-client.js';
 
 type EventCatalogue = {
   createOwnedEvent(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; categoryId: string; title: string; slug: string; description: string; city: string; state: string; venue: string; address: string; timeZone: string; startAt: Date; endAt: Date }): Promise<{ id: string }>;
-  listPublicEvents(input: { database: ReturnType<typeof createDatabaseClient>; query?: string; city?: string; state?: string; category?: string; sort?: 'upcoming' | 'featured' | 'popular'; page?: number }): Promise<{ items: Array<{ slug: string; title: string; availableTickets: number }>; page: number; total: number }>;
-  getPublicEvent(input: { database: ReturnType<typeof createDatabaseClient>; slug: string }): Promise<{ slug: string; title: string; ticketTypes: Array<{ name: string; priceKobo: number; availableTickets: number }> } | null>;
+  listPublicEvents(input: { database: ReturnType<typeof createDatabaseClient>; query?: string; city?: string; state?: string; category?: string; sort?: 'upcoming' | 'featured' | 'popular'; page?: number }): Promise<{ items: Array<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string }>; availableTickets: number }>; page: number; total: number }>;
+  getPublicEvent(input: { database: ReturnType<typeof createDatabaseClient>; slug: string }): Promise<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; address: string; timeZone: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string }>; ticketTypes: Array<{ id: string; name: string; description: string | null; priceKobo: number; salesStartAt: Date | null; salesEndAt: Date | null; maxPerOrder: number | null; availableTickets: number }> } | null>;
   publishOwnedEvent(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string; now: Date }): Promise<void>;
   updateOwnedEvent(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string; title?: string; description?: string; city?: string; state?: string; venue?: string; address?: string; timeZone?: string; startAt?: Date; endAt?: Date }): Promise<void>;
   unpublishOwnedEvent(input: { database: ReturnType<typeof createDatabaseClient>; organizerProfileId: string; eventId: string }): Promise<void>;
@@ -27,6 +27,7 @@ describe('event catalogue', () => {
 
   afterEach(async () => {
     if (client) {
+      await client.eventMedia.deleteMany({ where: { eventId: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
       await client.ticketType.deleteMany({ where: { eventId: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
       await client.event.deleteMany({ where: { id: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
       if (ids.categoryId) await client.eventCategory.deleteMany({ where: { id: ids.categoryId } });
@@ -47,10 +48,80 @@ describe('event catalogue', () => {
     await createFixture(client, ids);
 
     await catalogue.publishOwnedEvent({ database: client, organizerProfileId: ids.profileId, eventId: ids.eventId, now: new Date('2032-01-01T10:00:00.000Z') });
-    await expect(catalogue.listPublicEvents({ database: client, query: 'design', city: 'Lagos', category: 'design' })).resolves.toEqual({
-      items: [{ slug: 'design-summit', title: 'Design Summit', availableTickets: 0 }], page: 1, total: 1,
-    });
-    await expect(catalogue.getPublicEvent({ database: client, slug: 'design-summit' })).resolves.toEqual({ slug: 'design-summit', title: 'Design Summit', ticketTypes: [] });
+    await expect(catalogue.listPublicEvents({ database: client, query: 'design', city: 'Lagos', category: 'design' })).resolves.toEqual(expect.objectContaining({
+      items: [expect.objectContaining({ slug: 'design-summit', title: 'Design Summit', availableTickets: 0 })], page: 1, total: 1,
+    }));
+    await expect(catalogue.getPublicEvent({ database: client, slug: 'design-summit' })).resolves.toEqual(expect.objectContaining({ slug: 'design-summit', title: 'Design Summit', ticketTypes: [] }));
+  });
+
+  it('returns the identifiers required to quote and create an order from public event detail', async () => {
+    const catalogue = await loadEventCatalogue();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(catalogue).toBeDefined();
+    if (!catalogue || !databaseUrl) throw new Error('event catalogue is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const ticketTypeId = (await catalogue.createOwnedTicketType({
+      database: client,
+      organizerProfileId: ids.profileId,
+      eventId: ids.eventId,
+      name: 'Checkout General',
+      priceKobo: 750000,
+      capacity: 25,
+      maxPerOrder: 5,
+    })).id;
+    await catalogue.publishOwnedEvent({ database: client, organizerProfileId: ids.profileId, eventId: ids.eventId, now: new Date('2032-01-01T10:00:00.000Z') });
+
+    await expect(catalogue.getPublicEvent({ database: client, slug: 'design-summit' })).resolves.toEqual(expect.objectContaining({
+      id: ids.eventId,
+      ticketTypes: [expect.objectContaining({ id: ticketTypeId, name: 'Checkout General' })],
+    }));
+  });
+
+  it('returns complete public presentation fields and only ready media', async () => {
+    const catalogue = await loadEventCatalogue();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(catalogue).toBeDefined();
+    if (!catalogue || !databaseUrl) throw new Error('event catalogue is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const readyMediaId = randomUUID();
+    const coverMediaId = randomUUID();
+    const lastMediaId = randomUUID();
+    await client.eventMedia.createMany({ data: [
+      { id: readyMediaId, eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/ready.png`, publicUrl: 'https://media.example.test/ready.png', contentType: 'image/png', contentLength: 1024, status: 'READY', position: 0, expiresAt: new Date('2032-01-01T10:15:00.000Z'), completedAt: new Date('2032-01-01T10:01:00.000Z') },
+      { id: coverMediaId, eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/cover.png`, publicUrl: 'https://media.example.test/cover.png', contentType: 'image/png', contentLength: 1024, status: 'READY', position: 1, isCover: true, expiresAt: new Date('2032-01-01T10:15:00.000Z'), completedAt: new Date('2032-01-01T10:01:00.000Z') },
+      { id: lastMediaId, eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/last.png`, publicUrl: 'https://media.example.test/last.png', contentType: 'image/png', contentLength: 1024, status: 'READY', position: 2, expiresAt: new Date('2032-01-01T10:15:00.000Z'), completedAt: new Date('2032-01-01T10:01:00.000Z') },
+      { id: randomUUID(), eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/pending.png`, publicUrl: 'https://media.example.test/pending.png', contentType: 'image/png', contentLength: 1024, status: 'PENDING', expiresAt: new Date('2032-01-01T10:15:00.000Z') },
+    ] });
+    await catalogue.publishOwnedEvent({ database: client, organizerProfileId: ids.profileId, eventId: ids.eventId, now: new Date('2032-01-01T10:00:00.000Z') });
+
+    const publicFields = {
+      id: ids.eventId,
+      description: 'A design event',
+      city: 'Lagos',
+      state: 'Lagos',
+      venue: 'Venue',
+      startAt: new Date('2032-02-01T10:00:00.000Z'),
+      endAt: new Date('2032-02-01T12:00:00.000Z'),
+      category: { name: 'Design', slug: 'design' },
+      organizer: { name: 'Organizer' },
+      media: [
+        { id: coverMediaId, publicUrl: 'https://media.example.test/cover.png', isCover: true },
+        { id: readyMediaId, publicUrl: 'https://media.example.test/ready.png', isCover: false },
+        { id: lastMediaId, publicUrl: 'https://media.example.test/last.png', isCover: false },
+      ],
+    };
+    await expect(catalogue.listPublicEvents({ database: client, query: 'A design event' })).resolves.toEqual(expect.objectContaining({
+      items: [expect.objectContaining(publicFields)],
+    }));
+    await expect(catalogue.getPublicEvent({ database: client, slug: 'design-summit' })).resolves.toEqual(expect.objectContaining({
+      ...publicFields,
+      address: 'Address',
+      timeZone: 'Africa/Lagos',
+    }));
   });
 
   it('creates a valid draft only for an active organizer', async () => {
