@@ -12,58 +12,48 @@ import { readWorkerConfig } from './worker/worker-config.js';
 import { executeWorkerJob } from './worker/worker-dispatch.js';
 import { scheduleRecurringWork } from './worker/worker-schedule.js';
 
-const config = readWorkerConfig(process.env);
-const connection = { url: config.redisUrl, maxRetriesPerRequest: null };
-const queue = new Queue('everythingticket-worker', { connection });
-const gateway = createPaystackGateway({ secretKey: config.paystackSecretKey });
-const sender = createSmtpEmailSender({ config: config.smtp });
-const objectStore = createR2ObjectStore({ config: config.r2 });
-
-const worker = new Worker('everythingticket-worker', async (job) => executeWorkerJob({
-  name: job.name,
-  handlers: {
-    reconcilePayments: async () => withDatabase((database) => reconcilePendingPayments({ database, gateway, now: new Date() }).then(() => undefined)),
-    deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
-    generateTicketDocuments: async () => withDatabase((database) => processPendingTicketDocuments({ database, objectStore, ticketCredentialSecret: config.admissionTokenSecret, now: new Date() }).then(() => undefined)),
-    removeExpiredMedia: async () => withDatabase((database) => removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }).then(() => undefined)),
-  },
-}), { connection });
-
-worker.on('failed', (job, error) => {
-  console.error(JSON.stringify({ level: 'error', message: 'worker job failed', jobName: job?.name, jobId: job?.id, error: error.message }));
-});
-
-void start().catch((error: unknown) => {
-  console.error(JSON.stringify({ level: 'error', message: 'worker failed to start', error: error instanceof Error ? error.message : 'unknown error' }));
-  process.exitCode = 1;
-});
-
-async function start(): Promise<void> {
-  await scheduleRecurringWork({
-    queue,
-    paymentReconciliationIntervalMs: readPaymentReconciliationInterval(process.env.PAYMENT_RECONCILIATION_INTERVAL_MS),
-    notificationPollIntervalMs: config.notificationIntervalMs,
-    documentPollIntervalMs: config.documentPollIntervalMs,
-    mediaCleanupIntervalMs: config.mediaCleanupIntervalMs,
-  });
-  await queue.add('payment-reconciliation', {}, { removeOnComplete: 100, removeOnFail: 1_000 });
-  await queue.add('notification-delivery', {}, { removeOnComplete: 100, removeOnFail: 1_000 });
-  await queue.add('ticket-document-delivery', {}, { removeOnComplete: 100, removeOnFail: 1_000 });
-  await queue.add('expired-media-cleanup', {}, { removeOnComplete: 100, removeOnFail: 1_000 });
-}
-
-async function withDatabase<T>(callback: (database: ReturnType<typeof createDatabaseClient>) => Promise<T>): Promise<T> {
-  const database = createDatabaseClient(config.databaseUrl);
-  try {
-    return await callback(database);
-  } finally {
-    await database.$disconnect();
+export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ close(): Promise<void> }> {
+  const config = readWorkerConfig(environment);
+  async function withDatabase<T>(callback: (database: ReturnType<typeof createDatabaseClient>) => Promise<T>): Promise<T> {
+    const database = createDatabaseClient(config.databaseUrl);
+    try {
+      return await callback(database);
+    } finally {
+      await database.$disconnect();
+    }
   }
-}
+  const connection = { url: config.redisUrl, maxRetriesPerRequest: null };
+  const queue = new Queue('everythingticket-worker', { connection });
+  const gateway = createPaystackGateway({ secretKey: config.paystackSecretKey });
+  const sender = createSmtpEmailSender({ config: config.smtp });
+  const objectStore = createR2ObjectStore({ config: config.r2 });
 
-async function shutdown(): Promise<void> {
-  await Promise.all([worker.close(), queue.close()]);
-}
+  const worker = new Worker('everythingticket-worker', async (job) => executeWorkerJob({
+    name: job.name,
+    handlers: {
+      reconcilePayments: async () => withDatabase((database) => reconcilePendingPayments({ database, gateway, now: new Date() }).then(() => undefined)),
+      deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
+      generateTicketDocuments: async () => withDatabase((database) => processPendingTicketDocuments({ database, objectStore, ticketCredentialSecret: config.admissionTokenSecret, now: new Date() }).then(() => undefined)),
+      removeExpiredMedia: async () => withDatabase((database) => removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }).then(() => undefined)),
+    },
+  }), { connection });
 
-process.once('SIGINT', () => { void shutdown(); });
-process.once('SIGTERM', () => { void shutdown(); });
+  worker.on('failed', (job, error) => {
+    console.error(JSON.stringify({ level: 'error', message: 'worker job failed', jobName: job?.name, jobId: job?.id, error: error.message }));
+  });
+
+  try {
+    await scheduleRecurringWork({
+      queue,
+      paymentReconciliationIntervalMs: readPaymentReconciliationInterval(environment.PAYMENT_RECONCILIATION_INTERVAL_MS),
+      notificationPollIntervalMs: config.notificationIntervalMs,
+      documentPollIntervalMs: config.documentPollIntervalMs,
+      mediaCleanupIntervalMs: config.mediaCleanupIntervalMs,
+    });
+  } catch (error) {
+    await Promise.allSettled([worker.close(), queue.close()]);
+    throw error;
+  }
+
+  return { close: async () => { await Promise.all([worker.close(), queue.close()]); } };
+}

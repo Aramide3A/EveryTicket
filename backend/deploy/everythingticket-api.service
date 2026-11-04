@@ -1,5 +1,5 @@
 [Unit]
-Description=EverythingTicket NestJS API
+Description=EverythingTicket API and background jobs
 After=network-online.target
 Wants=network-online.target
 
@@ -12,7 +12,7 @@ EnvironmentFile=/etc/everythingticket/api.env
 ExecStart=/usr/bin/node /opt/everythingticket/backend/dist/main.js
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=30
+TimeoutStopSec=60
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
