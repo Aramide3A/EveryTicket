@@ -1,0 +1,9 @@
+[Unit]
+Description=Renew EverythingTicket HTTPS certificate
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=300
+ExecStart=/opt/everythingticket/certbot-venv/bin/certbot renew --quiet --no-random-sleep-on-renew --cert-name everythingticket-public-ip --deploy-hook "/usr/bin/systemctl reload nginx"

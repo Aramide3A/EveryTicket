@@ -1,17 +1,13 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 
-type ApiOptions = { publicAppUrl?: string };
-
-async function startApi(
-  options?: ApiOptions
-): Promise<INestApplication | undefined> {
+async function startApi(): Promise<INestApplication | undefined> {
   try {
     const modulePath = '../src/api.js';
     const { createApi } = (await import(modulePath)) as {
-      createApi: (options?: ApiOptions) => Promise<INestApplication>;
+      createApi: () => Promise<INestApplication>;
     };
-    return createApi(options);
+    return createApi();
   } catch (error) {
     if (String(error).includes("Cannot find module '../src/api.js'")) {
       return undefined;
@@ -52,21 +48,23 @@ describe('GET /health/live', () => {
       .expect(200, { status: 'ok' });
   });
 
-  it('serves the dependency check at /api/v1/health', async () => {
+  it('serves the dependency health check at the canonical health URL', async () => {
     app = await startApi();
     if (!app) throw new Error('API factory is unavailable');
 
-    const databaseUrl = process.env.DATABASE_URL;
-    const redisUrl = process.env.REDIS_URL;
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousRedisUrl = process.env.REDIS_URL;
     delete process.env.DATABASE_URL;
     delete process.env.REDIS_URL;
     try {
-      await request(app.getHttpServer()).get('/api/v1/health').expect(503);
+      await request(app.getHttpServer())
+        .get('/api/v1/health')
+        .expect(503, { message: 'readiness dependencies are not configured', error: 'Service Unavailable', statusCode: 503 });
     } finally {
-      if (databaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = databaseUrl;
-      if (redisUrl === undefined) delete process.env.REDIS_URL;
-      else process.env.REDIS_URL = redisUrl;
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousRedisUrl === undefined) delete process.env.REDIS_URL;
+      else process.env.REDIS_URL = previousRedisUrl;
     }
   });
 
@@ -99,10 +97,8 @@ describe('GET /health/live', () => {
     expect(response.headers['x-frame-options']).toBe('SAMEORIGIN');
   });
 
-  it('permits credentialed calls from the configured web origin', async () => {
-    app = await startApi({
-      publicAppUrl: 'https://app.everythingticket.example'
-    });
+  it('permits credentialed calls from the web origin', async () => {
+    app = await startApi();
 
     if (!app) {
       throw new Error('API factory is unavailable');
@@ -164,25 +160,38 @@ describe('GET /health/live', () => {
     const response = await request(app.getHttpServer()).get('/api/v1/docs-json').expect(200);
     const paths = response.body.paths as Record<string, unknown>;
     const requiredPaths = [
+      '/api/v1/health',
+      '/api/v1/health/live',
+      '/api/v1/health/ready',
       '/api/v1/account/me',
+      '/api/v1/account/organizer',
       '/api/v1/account/orders',
       '/api/v1/account/orders/{orderReference}',
       '/api/v1/account/tickets',
       '/api/v1/account/tickets/{ticketId}',
       '/api/v1/account/tickets/{ticketId}/download',
+      '/api/v1/customer/orders',
+      '/api/v1/customer/tickets/{ticketId}',
+      '/api/v1/customer/tickets/{ticketId}/download',
+      '/api/v1/customer/orders/{orderReference}/resend-confirmation',
       '/api/v1/categories',
       '/api/v1/events',
       '/api/v1/events/{slug}',
       '/api/v1/orders/quote',
       '/api/v1/orders',
       '/api/v1/orders/{orderReference}/status',
+      '/api/v1/orders/{orderReference}/guest',
+      '/api/v1/orders/{orderReference}/tickets/{ticketId}/download',
+      '/api/v1/orders/{orderReference}/payments',
       '/api/v1/orders/{orderReference}/reconcile',
+      '/api/v1/payments/{paymentReference}/reconcile',
       '/api/v1/webhooks/paystack',
       '/api/v1/organizer/events',
       '/api/v1/organizer-registration',
       '/api/v1/organizer/events/{eventId}',
       '/api/v1/organizer/events/{eventId}/publish',
       '/api/v1/organizer/events/{eventId}/unpublish',
+      '/api/v1/organizer/events/{eventId}/cancel',
       '/api/v1/organizer/events/{eventId}/ticket-types',
       '/api/v1/organizer/events/{eventId}/ticket-types/{ticketTypeId}',
       '/api/v1/organizer/events/{eventId}/dashboard',
@@ -191,19 +200,34 @@ describe('GET /health/live', () => {
       '/api/v1/organizer/events/{eventId}/attendees.csv',
       '/api/v1/organizer/events/{eventId}/media/upload-intent',
       '/api/v1/organizer/events/{eventId}/media/complete',
+      '/api/v1/organizer/events/{eventId}/media/{mediaId}/complete',
+      '/api/v1/organizer/events/{eventId}/media',
+      '/api/v1/organizer/events/{eventId}/media/order',
+      '/api/v1/organizer/events/{eventId}/media/cover',
+      '/api/v1/organizer/events/{eventId}/media/{mediaId}',
       '/api/v1/organizer/orders/{orderId}/refund-requests',
+      '/api/v1/organizer/orders/{orderId}/refund-inputs',
       '/api/v1/organizer/refund-requests',
+      '/api/v1/organizer/refund-requests/{refundRequestId}',
+      '/api/v1/organizer/refund-requests/{refundRequestId}/cancel',
       '/api/v1/organizer/events/{eventId}/payout-requests',
       '/api/v1/organizer/payout-requests',
+      '/api/v1/organizer/payout-requests/{payoutRequestId}',
+      '/api/v1/organizer/payout-requests/{payoutRequestId}/receipt.csv',
       '/api/v1/organizer/events/{eventId}/guest-lists',
       '/api/v1/organizer/guest-lists/{guestListId}/links',
       '/api/v1/organizer/guest-lists/{guestListId}/guests',
       '/api/v1/organizer/guest-lists/{guestListId}/guests.csv',
+      '/api/v1/organizer/guests/{guestId}',
+      '/api/v1/organizer/guests/{guestId}/revoke',
+      '/api/v1/organizer/guests/{guestId}/credential/reissue',
       '/api/v1/rsvp/{token}',
       '/api/v1/rsvp/{token}/responses',
       '/api/v1/organizer/events/{eventId}/check-ins/preview',
       '/api/v1/organizer/events/{eventId}/check-ins/confirm',
       '/api/v1/organizer/events/{eventId}/check-ins/summary',
+      '/api/v1/organizer/events/{eventId}/check-ins',
+      '/api/v1/organizer/events/{eventId}/check-ins.csv',
       '/api/v1/admin/events',
       '/api/v1/admin/events/{eventId}/suspend',
       '/api/v1/admin/events/{eventId}/restore',
@@ -229,19 +253,31 @@ describe('GET /health/live', () => {
     for (const path of requiredPaths) expect(paths[path]).toBeDefined();
 
     const requiredOperations: Array<[string, string]> = [
+      ['/api/v1/health', 'get'],
+      ['/api/v1/health/live', 'get'],
+      ['/api/v1/health/ready', 'get'],
       ['/api/v1/account/me', 'get'],
+      ['/api/v1/account/organizer', 'post'],
       ['/api/v1/account/orders', 'get'],
       ['/api/v1/account/orders/{orderReference}', 'get'],
       ['/api/v1/account/tickets', 'get'],
       ['/api/v1/account/tickets/{ticketId}', 'get'],
       ['/api/v1/account/tickets/{ticketId}/download', 'get'],
+      ['/api/v1/customer/orders', 'get'],
+      ['/api/v1/customer/tickets/{ticketId}', 'get'],
+      ['/api/v1/customer/tickets/{ticketId}/download', 'get'],
+      ['/api/v1/customer/orders/{orderReference}/resend-confirmation', 'post'],
       ['/api/v1/categories', 'get'],
       ['/api/v1/events', 'get'],
       ['/api/v1/events/{slug}', 'get'],
       ['/api/v1/orders/quote', 'post'],
       ['/api/v1/orders', 'post'],
       ['/api/v1/orders/{orderReference}/status', 'get'],
+      ['/api/v1/orders/{orderReference}/guest', 'get'],
+      ['/api/v1/orders/{orderReference}/tickets/{ticketId}/download', 'get'],
+      ['/api/v1/orders/{orderReference}/payments', 'post'],
       ['/api/v1/orders/{orderReference}/reconcile', 'post'],
+      ['/api/v1/payments/{paymentReference}/reconcile', 'post'],
       ['/api/v1/webhooks/paystack', 'post'],
       ['/api/v1/organizer/events', 'get'],
       ['/api/v1/organizer-registration', 'post'],
@@ -250,6 +286,8 @@ describe('GET /health/live', () => {
       ['/api/v1/organizer/events/{eventId}', 'patch'],
       ['/api/v1/organizer/events/{eventId}/publish', 'post'],
       ['/api/v1/organizer/events/{eventId}/unpublish', 'post'],
+      ['/api/v1/organizer/events/{eventId}/cancel', 'post'],
+      ['/api/v1/organizer/events/{eventId}', 'delete'],
       ['/api/v1/organizer/events/{eventId}/ticket-types', 'post'],
       ['/api/v1/organizer/events/{eventId}/ticket-types/{ticketTypeId}', 'patch'],
       ['/api/v1/organizer/events/{eventId}/ticket-types/{ticketTypeId}', 'delete'],
@@ -259,21 +297,39 @@ describe('GET /health/live', () => {
       ['/api/v1/organizer/events/{eventId}/attendees.csv', 'get'],
       ['/api/v1/organizer/events/{eventId}/media/upload-intent', 'post'],
       ['/api/v1/organizer/events/{eventId}/media/complete', 'post'],
+      ['/api/v1/organizer/events/{eventId}/media/{mediaId}/complete', 'post'],
+      ['/api/v1/organizer/events/{eventId}/media', 'get'],
+      ['/api/v1/organizer/events/{eventId}/media/order', 'put'],
+      ['/api/v1/organizer/events/{eventId}/media/cover', 'put'],
+      ['/api/v1/organizer/events/{eventId}/media/{mediaId}', 'delete'],
       ['/api/v1/organizer/orders/{orderId}/refund-requests', 'post'],
+      ['/api/v1/organizer/orders/{orderId}/refund-inputs', 'get'],
       ['/api/v1/organizer/refund-requests', 'get'],
+      ['/api/v1/organizer/refund-requests/{refundRequestId}', 'get'],
+      ['/api/v1/organizer/refund-requests/{refundRequestId}', 'patch'],
+      ['/api/v1/organizer/refund-requests/{refundRequestId}/cancel', 'post'],
       ['/api/v1/organizer/events/{eventId}/payout-requests', 'post'],
       ['/api/v1/organizer/payout-requests', 'get'],
+      ['/api/v1/organizer/payout-requests/{payoutRequestId}', 'get'],
+      ['/api/v1/organizer/payout-requests/{payoutRequestId}/receipt.csv', 'get'],
       ['/api/v1/organizer/events/{eventId}/guest-lists', 'post'],
+      ['/api/v1/organizer/events/{eventId}/guest-lists', 'get'],
       ['/api/v1/organizer/guest-lists/{guestListId}/links', 'post'],
       ['/api/v1/organizer/guest-lists/{guestListId}/guests', 'get'],
       ['/api/v1/organizer/guest-lists/{guestListId}/guests', 'post'],
       ['/api/v1/organizer/guest-lists/{guestListId}/guests', 'patch'],
       ['/api/v1/organizer/guest-lists/{guestListId}/guests.csv', 'get'],
+      ['/api/v1/organizer/guests/{guestId}', 'patch'],
+      ['/api/v1/organizer/guests/{guestId}', 'delete'],
+      ['/api/v1/organizer/guests/{guestId}/revoke', 'post'],
+      ['/api/v1/organizer/guests/{guestId}/credential/reissue', 'post'],
       ['/api/v1/rsvp/{token}', 'get'],
       ['/api/v1/rsvp/{token}/responses', 'post'],
       ['/api/v1/organizer/events/{eventId}/check-ins/preview', 'post'],
       ['/api/v1/organizer/events/{eventId}/check-ins/confirm', 'post'],
       ['/api/v1/organizer/events/{eventId}/check-ins/summary', 'get'],
+      ['/api/v1/organizer/events/{eventId}/check-ins', 'get'],
+      ['/api/v1/organizer/events/{eventId}/check-ins.csv', 'get'],
       ['/api/v1/admin/events', 'get'],
       ['/api/v1/admin/events/{eventId}/suspend', 'post'],
       ['/api/v1/admin/events/{eventId}/restore', 'post'],
