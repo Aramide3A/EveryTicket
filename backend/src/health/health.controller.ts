@@ -9,6 +9,11 @@ export class HealthController {
     return { status: 'ok' };
   }
 
+  @Get()
+  health(): Promise<{ status: 'ok'; checks: { database: 'ok'; redis: 'ok' } }> {
+    return this.ready();
+  }
+
   @Get('ready')
   async ready(): Promise<{ status: 'ok'; checks: { database: 'ok'; redis: 'ok' } }> {
     const databaseUrl = process.env.DATABASE_URL;

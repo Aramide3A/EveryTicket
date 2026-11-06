@@ -32,6 +32,7 @@
       {"name":"GET Legacy Swagger UI","request":{"method":"GET","url":"{{baseUrl}}/docs"}}
     ]},
     {"name":"Health","item":[
+      {"name":"GET Health","request":{"method":"GET","description":"Health check for PostgreSQL and Redis.","url":"{{apiBaseUrl}}/health"}},
       {"name":"GET Live","request":{"method":"GET","description":"Liveness check; no dependency check.","url":"{{apiBaseUrl}}/health/live"}},
       {"name":"GET Ready","request":{"method":"GET","description":"Readiness check for PostgreSQL and Redis.","url":"{{apiBaseUrl}}/health/ready"}}
     ]},

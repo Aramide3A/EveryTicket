@@ -52,6 +52,24 @@ describe('GET /health/live', () => {
       .expect(200, { status: 'ok' });
   });
 
+  it('serves the dependency check at /api/v1/health', async () => {
+    app = await startApi();
+    if (!app) throw new Error('API factory is unavailable');
+
+    const databaseUrl = process.env.DATABASE_URL;
+    const redisUrl = process.env.REDIS_URL;
+    delete process.env.DATABASE_URL;
+    delete process.env.REDIS_URL;
+    try {
+      await request(app.getHttpServer()).get('/api/v1/health').expect(503);
+    } finally {
+      if (databaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = databaseUrl;
+      if (redisUrl === undefined) delete process.env.REDIS_URL;
+      else process.env.REDIS_URL = redisUrl;
+    }
+  });
+
   it('assigns a distinct request ID to each response', async () => {
     app = await startApi();
 
@@ -118,6 +136,7 @@ describe('GET /health/live', () => {
     );
     expect(response.body.paths).toEqual(
       expect.objectContaining({
+        '/api/v1/health': expect.any(Object),
         '/api/v1/health/live': expect.any(Object),
         '/api/v1/orders/quote': expect.any(Object),
         '/api/v1/account/me': expect.any(Object),

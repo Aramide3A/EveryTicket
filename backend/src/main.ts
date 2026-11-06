@@ -9,7 +9,7 @@ import { startWorker } from './worker.js';
 const config = readRuntimeConfig(process.env);
 
 void startApplication({
-  createApi: () => createApi(config),
+  createApi: () => createApi(),
   startWorker: () => startWorker(process.env),
   port: config.port,
 }).then((application) => {

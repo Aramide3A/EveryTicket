@@ -110,9 +110,7 @@ export const auth = createAuth({
     subject: 'Reset your EverythingTicket password',
     text: `Reset your EverythingTicket password using this secure link: ${url}`,
   }) : undefined,
-  trustedOrigins: process.env.PUBLIC_APP_URL
-    ? [process.env.PUBLIC_APP_URL]
-    : undefined
+  trustedOrigins: [process.env.PUBLIC_APP_URL, 'http://localhost:5173'].filter((origin): origin is string => !!origin)
 });
 
 function requiredEnvironment(name: string): string {
