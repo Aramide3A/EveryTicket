@@ -6,11 +6,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 import { createRequestRateLimiter, readRequestRateLimit } from './common/http/request-rate-limit.js';
 
-export type ApiOptions = { publicAppUrl?: string };
-
-export async function createApi(
-  { publicAppUrl }: ApiOptions = {}
-): Promise<INestApplication> {
+export async function createApi(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false, rawBody: true });
   app.setGlobalPrefix('api/v1');
   const rateLimiter = createRequestRateLimiter();
@@ -38,9 +34,7 @@ export async function createApi(
     response.status(429).json({ statusCode: 429, error: 'Too Many Requests', message: 'request rate limit exceeded' });
   });
 
-  if (publicAppUrl) {
-    app.enableCors({ origin: publicAppUrl, credentials: true });
-  }
+  app.enableCors({ origin: true, credentials: true });
 
   app.use(helmet());
 
