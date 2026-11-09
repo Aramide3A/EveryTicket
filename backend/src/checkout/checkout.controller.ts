@@ -7,8 +7,9 @@ import {
   NotFoundException,
   Param,
   Post,
-  ServiceUnavailableException,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { randomUUID } from 'node:crypto';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { withDatabase } from '../persistence/database-operation.js';
@@ -19,6 +20,8 @@ import { initializePayment } from '../payments/payment-lifecycle.js';
 import { createPaystackGateway } from '../payments/paystack-gateway.js';
 import { guestCheckoutProfileId, normalizeBuyerEmail } from './guest-checkout-account-link.js';
 import { getGuestOrder, getGuestTicketDownload } from './guest-order-access.js';
+import { findActiveProfile } from '../identity/current-profile.js';
+import { withInitialPayment } from './created-order-payment.js';
 
 @ApiTags('Checkout')
 @Controller('orders')
@@ -38,20 +41,16 @@ export class CheckoutController {
   @Post()
   @ApiOperation({ summary: 'Create an order and initialize payment when required' })
   @ApiBody({ schema: { type: 'object', required: ['eventId', 'buyer', 'items'], properties: { eventId: { type: 'string' }, buyer: { type: 'object', required: ['name', 'email'], properties: { name: { type: 'string' }, email: { type: 'string', format: 'email' }, phone: { type: 'string' } } }, items: { type: 'array', items: { type: 'object', required: ['ticketTypeId', 'quantity'], properties: { ticketTypeId: { type: 'string' }, quantity: { type: 'integer', minimum: 1 } } } } } } })
-  async create(@Body() body: unknown) {
+  async create(@Req() request: Request, @Body() body: unknown) {
     const input = readCreateOrderInput(body);
     const now = new Date();
     const holdExpiresAt = new Date(now.getTime() + 10 * 60 * 1000);
+    const profile = await findActiveProfile(request, 'CUSTOMER');
     return withDatabase({
       unavailableMessage: 'checkout is not configured',
       callback: async (database) => {
-        const quote = await quoteCheckout({ database, eventId: input.eventId, items: input.items, now, holdTtlMs: 10 * 60 * 1000 });
+        await quoteCheckout({ database, eventId: input.eventId, items: input.items, now, holdTtlMs: 10 * 60 * 1000 });
         const secretKey = process.env.PAYSTACK_SECRET_KEY;
-        if (quote.totalKobo > 0 && !secretKey) throw new ServiceUnavailableException('payments are not configured');
-        const profile = await database.applicationProfile.findFirst({
-          where: { status: 'ACTIVE', user: { email: input.buyer.email } },
-          select: { id: true },
-        });
         const order = await createCheckoutOrder({
           database,
           ...input,
@@ -61,21 +60,15 @@ export class CheckoutController {
           holdExpiresAt,
         });
         if (order.status === 'PAID') return order;
-        try {
-          const payment = await initializePayment({
+        return withInitialPayment(order, () =>
+          initializePayment({
             database,
             gateway: createPaystackGateway({ secretKey: secretKey as string }),
             orderReference: order.reference,
             paymentReference: `ETP-${randomUUID()}`,
             now,
-          });
-          return { ...order, payment };
-        } catch {
-          throw new ServiceUnavailableException({
-            message: 'payment initialization failed; retry with the returned order reference',
-            orderReference: order.reference,
-          });
-        }
+          }),
+        );
       },
     });
   }

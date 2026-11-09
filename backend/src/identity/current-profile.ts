@@ -7,14 +7,25 @@ export async function requireActiveProfile(
   request: Request,
   role?: ApplicationRole,
 ): Promise<{ id: string; role: 'CUSTOMER' | 'ORGANIZER' | 'ADMIN'; roles: ApplicationRole[] }> {
+  const profile = await findActiveProfile(request, role);
+  if (!profile) {
+    throw new UnauthorizedException('active account access is required');
+  }
+  return profile;
+}
+
+export async function findActiveProfile(
+  request: Request,
+  role?: ApplicationRole,
+): Promise<{ id: string; role: 'CUSTOMER' | 'ORGANIZER' | 'ADMIN'; roles: ApplicationRole[] } | null> {
   if (!request.headers.cookie) {
-    throw new UnauthorizedException('authentication is required');
+    return null;
   }
   const { auth } = await import('./auth.js');
   const { fromNodeHeaders } = await import('better-auth/node');
   const session = await auth.api.getSession({ headers: fromNodeHeaders(request.headers) });
   if (!session) {
-    throw new UnauthorizedException('authentication is required');
+    return null;
   }
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -26,9 +37,7 @@ export async function requireActiveProfile(
       where: { userId: session.user.id },
       select: { id: true, role: true, roles: true, status: true },
     });
-    if (!profile || profile.status !== 'ACTIVE' || (role && !profileHasRole(profile, role))) {
-      throw new UnauthorizedException('active account access is required');
-    }
+    if (!profile || profile.status !== 'ACTIVE' || (role && !profileHasRole(profile, role))) return null;
     return profile;
   } finally {
     await database.$disconnect();
