@@ -1,4 +1,4 @@
-import type { PrismaClient } from '../generated/prisma/client.js';
+import type { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
 
 export async function createOwnedEvent({
@@ -33,7 +33,9 @@ export async function createOwnedEvent({
   if (!title.trim() || !slug.trim() || !description.trim() || !city.trim() || !state.trim() || !venue.trim() || !address.trim() || !timeZone.trim() || startAt >= endAt) throw new RangeError('event details are invalid');
   const organizer = await database.applicationProfile.findFirst({ where: { id: organizerProfileId, status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') }, select: { id: true } });
   if (!organizer) throw new Error('event is unavailable to this organizer');
-  return database.event.create({ data: { organizerProfileId, categoryId, title: title.trim(), slug: slug.trim(), description: description.trim(), city: city.trim(), state: state.trim(), venue: venue.trim(), address: address.trim(), timeZone: timeZone.trim(), startAt, endAt }, select: { id: true } });
+  const event = await database.event.create({ data: { organizerProfileId, categoryId, title: title.trim(), slug: slug.trim(), description: description.trim(), city: city.trim(), state: state.trim(), venue: venue.trim(), address: address.trim(), timeZone: timeZone.trim(), startAt, endAt }, select: { id: true } });
+  await recordOrganizerAudit(database, organizerProfileId, 'EVENT_CREATED', 'EVENT', event.id, { categoryId, title: title.trim() });
+  return event;
 }
 
 export async function publishOwnedEvent({
@@ -60,6 +62,7 @@ export async function publishOwnedEvent({
   });
   if (!event) throw new Error('event is unavailable to this organizer');
   await database.event.update({ where: { id: event.id }, data: { status: 'PUBLISHED', publishedAt: now } });
+  await recordOrganizerAudit(database, organizerProfileId, 'EVENT_PUBLISHED', 'EVENT', event.id);
 }
 
 export async function listPublicEvents({
@@ -225,6 +228,7 @@ export async function updateOwnedEvent({
   const values = { categoryId: categoryId ?? event.categoryId, title: title ?? event.title, slug: slug ?? event.slug, description: description ?? event.description, city: city ?? event.city, state: state ?? event.state, venue: venue ?? event.venue, address: address ?? event.address, timeZone: timeZone ?? event.timeZone, startAt: startAt ?? event.startAt, endAt: endAt ?? event.endAt };
   validateEventValues(values);
   await database.event.update({ where: { id: event.id }, data: { ...values, categoryId: values.categoryId.trim(), title: values.title.trim(), slug: values.slug.trim(), description: values.description.trim(), city: values.city.trim(), state: values.state.trim(), venue: values.venue.trim(), address: values.address.trim(), timeZone: values.timeZone.trim() } });
+  await recordOrganizerAudit(database, organizerProfileId, 'EVENT_UPDATED', 'EVENT', event.id);
 }
 
 export async function unpublishOwnedEvent({
@@ -239,6 +243,7 @@ export async function unpublishOwnedEvent({
   const event = await database.event.findFirst({ where: { id: eventId, organizerProfileId, status: 'PUBLISHED', organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } }, select: { id: true } });
   if (!event) throw new Error('event is unavailable to this organizer');
   await database.event.update({ where: { id: event.id }, data: { status: 'DRAFT', publishedAt: null } });
+  await recordOrganizerAudit(database, organizerProfileId, 'EVENT_UNPUBLISHED', 'EVENT', event.id);
 }
 
 export async function createOwnedTicketType({
@@ -266,7 +271,9 @@ export async function createOwnedTicketType({
 }): Promise<{ id: string }> {
   await findOwnedDraftEvent({ database, organizerProfileId, eventId });
   validateTicketTypeValues({ name, description, priceKobo, capacity, salesStartAt, salesEndAt, maxPerOrder });
-  return database.ticketType.create({ data: { eventId, name: name.trim(), description: description?.trim() || null, priceKobo, capacity, salesStartAt, salesEndAt, maxPerOrder }, select: { id: true } });
+  const ticketType = await database.ticketType.create({ data: { eventId, name: name.trim(), description: description?.trim() || null, priceKobo, capacity, salesStartAt, salesEndAt, maxPerOrder }, select: { id: true } });
+  await recordOrganizerAudit(database, organizerProfileId, 'TICKET_TYPE_CREATED', 'TICKET_TYPE', ticketType.id, { eventId });
+  return ticketType;
 }
 
 export async function updateOwnedTicketType({
@@ -304,6 +311,7 @@ export async function updateOwnedTicketType({
   const values = { name: name ?? ticketType.name, description: description === undefined ? ticketType.description : description, priceKobo: priceKobo ?? ticketType.priceKobo, capacity: capacity ?? ticketType.capacity, salesStartAt: salesStartAt === undefined ? ticketType.salesStartAt : salesStartAt, salesEndAt: salesEndAt === undefined ? ticketType.salesEndAt : salesEndAt, maxPerOrder: maxPerOrder === undefined ? ticketType.maxPerOrder : maxPerOrder };
   validateTicketTypeValues(values);
   await database.ticketType.update({ where: { id: ticketType.id }, data: { ...values, name: values.name.trim(), description: values.description?.trim() || null, isActive: isActive ?? ticketType.isActive } });
+  await recordOrganizerAudit(database, organizerProfileId, 'TICKET_TYPE_UPDATED', 'TICKET_TYPE', ticketType.id, { eventId });
 }
 
 export async function removeOwnedTicketType({
@@ -323,6 +331,7 @@ export async function removeOwnedTicketType({
   });
   if (!ticketType || ticketType._count.orderLines || ticketType._count.holds || ticketType._count.tickets) throw new Error('ticket type cannot be removed');
   await database.ticketType.delete({ where: { id: ticketType.id } });
+  await recordOrganizerAudit(database, organizerProfileId, 'TICKET_TYPE_REMOVED', 'TICKET_TYPE', ticketType.id, { eventId });
 }
 
 async function findOwnedDraftEvent({ database, organizerProfileId, eventId }: { database: PrismaClient; organizerProfileId: string; eventId: string }) {
@@ -337,4 +346,8 @@ function validateEventValues(values: { categoryId: string; title: string; slug: 
 
 function validateTicketTypeValues(values: { name: string; description?: string | null; priceKobo: number; capacity: number; salesStartAt?: Date | null; salesEndAt?: Date | null; maxPerOrder?: number | null }): void {
   if (!values.name.trim() || !Number.isSafeInteger(values.priceKobo) || values.priceKobo < 0 || !Number.isSafeInteger(values.capacity) || values.capacity < 1 || (values.maxPerOrder !== undefined && values.maxPerOrder !== null && (!Number.isSafeInteger(values.maxPerOrder) || values.maxPerOrder < 1)) || (values.salesStartAt && values.salesEndAt && values.salesStartAt >= values.salesEndAt)) throw new RangeError('ticket type details are invalid');
+}
+
+async function recordOrganizerAudit(database: PrismaClient, actorProfileId: string, action: string, targetType: string, targetId: string, details?: Record<string, unknown>): Promise<void> {
+  await database.auditLog.create({ data: { actorProfileId, action, targetType, targetId, ...(details ? { details: details as Prisma.InputJsonValue } : {}) } });
 }

@@ -47,6 +47,12 @@ export class EventController {
     return runEventDatabaseOperation((database) => database.eventCategory.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, slug: true } }));
   }
 
+  @Get('ticket-categories')
+  @ApiOperation({ summary: 'List reusable ticket-type templates' })
+  async ticketCategories() {
+    return runEventDatabaseOperation((database) => database.ticketCategoryTemplate.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, slug: true, description: true } }));
+  }
+
   @Get('events')
   @ApiOperation({ summary: 'List public published events' })
   async events(@Query('query') query?: string, @Query('city') city?: string, @Query('state') state?: string, @Query('category') category?: string, @Query('sort') sort?: string, @Query('page') page?: string) {

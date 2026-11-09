@@ -67,6 +67,14 @@ export function createAuth({
       }
     },
     advanced: {
+      // The frontend currently uses a different site (`everyticket.vercel.app`)
+      // from the API, so its browser requests need an explicitly cross-site,
+      // HTTPS-only session cookie.
+      useSecureCookies: true,
+      defaultCookieAttributes: {
+        sameSite: 'none',
+        secure: true,
+      },
       database: {
         joins: true
       }
@@ -110,7 +118,11 @@ export const auth = createAuth({
     subject: 'Reset your EverythingTicket password',
     text: `Reset your EverythingTicket password using this secure link: ${url}`,
   }) : undefined,
-  trustedOrigins: [process.env.PUBLIC_APP_URL, 'http://localhost:5173'].filter((origin): origin is string => !!origin)
+  trustedOrigins: [
+    process.env.PUBLIC_APP_URL,
+    'http://localhost:5173',
+    'https://everyticket.vercel.app',
+  ].filter((origin): origin is string => !!origin)
 });
 
 function requiredEnvironment(name: string): string {

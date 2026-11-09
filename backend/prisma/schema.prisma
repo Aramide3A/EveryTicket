@@ -210,6 +210,17 @@ model EventCategory {
   @@map("event_category")
 }
 
+model TicketCategoryTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("ticket_category_template")
+}
+
 model Event {
   id                 String             @id @default(cuid())
   organizerProfileId String

@@ -7,6 +7,7 @@ import { createDatabaseOperation } from '../persistence/database-operation.js';
 import { readPagination } from '../common/http/pagination.js';
 import { createR2ObjectStore } from '../worker/r2-object-store.js';
 import { readR2Config } from '../worker/worker-config.js';
+import { pageAuditLogs } from '../audit/audit-log.js';
 import { cancelRefundRequest, createPayoutRequest, createRefundRequest, exportOrganizerAttendeesCsv, exportOrganizerCheckInsCsv, exportOrganizerPayoutReceiptCsv, getOrganizerDashboard, getOrganizerOrderRefundInputs, getOrganizerPayoutRequest, getOrganizerRefundRequest, listOrganizerCheckIns, pageOrganizerAttendees, pageOrganizerOrders, pageOrganizerPayoutRequests, pageOrganizerRefundRequests, updateRefundRequest } from './organizer-operations.js';
 
 const runOrganizerDatabaseOperation = createDatabaseOperation('organizer operations are not configured');
@@ -16,6 +17,12 @@ const runOrganizerDatabaseOperation = createDatabaseOperation('organizer operati
 @Controller('organizer')
 export class OrganizerController {
   private readonly withDatabase = runOrganizerDatabaseOperation;
+  @Get('audit-logs')
+  async auditLogs(@Req() request: Request, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    return this.withDatabase((database) => pageAuditLogs({ database, profileId: profile.id, role: 'ORGANIZER', ...readPagination(page, pageSize) }));
+  }
+
   @Get('events/:eventId/dashboard')
   async dashboard(@Req() request: Request, @Param('eventId') eventId: string) {
     const profile = await requireActiveProfile(request, 'ORGANIZER');

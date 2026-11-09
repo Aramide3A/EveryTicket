@@ -1,5 +1,5 @@
 describe('Better Auth trusted origins', () => {
-  it('trusts the local development frontend alongside the configured app', async () => {
+  it('trusts the local and Vercel frontends alongside the configured app', async () => {
     const previous = {
       databaseUrl: process.env.DATABASE_URL,
       secret: process.env.BETTER_AUTH_SECRET,
@@ -16,7 +16,13 @@ describe('Better Auth trusted origins', () => {
       expect(auth.options.trustedOrigins).toEqual(expect.arrayContaining([
         'https://app.everythingticket.example',
         'http://localhost:5173',
+        'https://everyticket.vercel.app',
       ]));
+      expect(auth.options.advanced?.useSecureCookies).toBe(true);
+      expect(auth.options.advanced?.defaultCookieAttributes).toEqual(expect.objectContaining({
+        sameSite: 'none',
+        secure: true,
+      }));
     } finally {
       if (previous.databaseUrl === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = previous.databaseUrl;

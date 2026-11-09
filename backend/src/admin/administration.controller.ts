@@ -5,6 +5,8 @@ import { requireActiveProfile } from '../identity/current-profile.js';
 import { readPagination } from '../common/http/pagination.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
 import { createPaystackGateway } from '../payments/paystack-gateway.js';
+import { pageAuditLogs } from '../audit/audit-log.js';
+import { createEventCategory, listEventCategoriesForAdmin, updateEventCategory } from './category-administration.js';
 import { approvePayoutRequest, approveRefundRequest, blockProfile, executeApprovedRefund, getActivePlatformFeeRule, getAdministrationSummary, markPayoutPaid, markRefundProcessed, pageAdministrationEvents, pageAdministrationOrders, pageAdministrationPayoutRequests, pageAdministrationProfiles, pageAdministrationRefundRequests, reconcileExecutedRefund, rejectPayoutRequest, rejectRefundRequest, replacePlatformFeeRule, restoreEvent, setEventFeatured, suspendEvent, unblockProfile } from './administration.js';
 
 const runAdministrationDatabaseOperation = createDatabaseOperation('administration is not configured');
@@ -52,6 +54,34 @@ export class AdministrationController {
   async users(@Req() request: Request, @Query('q') query?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
     return this.withDatabase((database) => pageAdministrationProfiles({ database, adminProfileId: profile.id, query, ...readPagination(page, pageSize) }));
+  }
+
+  @Get('audit-logs')
+  async auditLogs(@Req() request: Request, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => pageAuditLogs({ database, profileId: profile.id, role: 'ADMIN', ...readPagination(page, pageSize) }));
+  }
+
+  @Get('categories')
+  async categories(@Req() request: Request) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => listEventCategoriesForAdmin({ database, adminProfileId: profile.id }));
+  }
+
+  @Post('categories')
+  async createCategory(@Req() request: Request, @Body() body: unknown) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => createEventCategory({ database, adminProfileId: profile.id, name: readString(body, 'name'), slug: readString(body, 'slug') }));
+  }
+
+  @Patch('categories/:categoryId')
+  async updateCategory(@Req() request: Request, @Param('categoryId') categoryId: string, @Body() body: unknown) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    const record = asRecord(body);
+    const name = optionalString(record.name, 'name');
+    const slug = optionalString(record.slug, 'slug');
+    if (name === undefined && slug === undefined) throw new BadRequestException('category changes are required');
+    return this.withDatabase((database) => updateEventCategory({ database, adminProfileId: profile.id, categoryId, name, slug }));
   }
 
   @Post('users/:profileId/block')
@@ -183,6 +213,12 @@ function readInteger(body: unknown, field: string): number {
 function optionalInteger(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new BadRequestException('fee amount is invalid');
+  return value;
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !value.trim()) throw new BadRequestException(`${field} is invalid`);
   return value;
 }
 

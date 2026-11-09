@@ -281,6 +281,7 @@ export async function createRefundRequest({
       },
       select: { id: true, status: true, totalRefundKobo: true },
     });
+    await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'REFUND_REQUEST_CREATED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { orderId, ticketIds } } });
     return { id: refund.id, status: 'REQUESTED', totalRefundKobo: refund.totalRefundKobo };
   });
 }
@@ -334,6 +335,7 @@ export async function createPayoutRequest({
       },
       select: { id: true, requestedAmountKobo: true, calculatedPayableKobo: true },
     });
+    await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'PAYOUT_REQUEST_CREATED', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { eventId, requestedAmountKobo: payout.requestedAmountKobo } } });
     return { id: payout.id, status: 'REQUESTED', requestedAmountKobo: payout.requestedAmountKobo, calculatedPayableKobo: payout.calculatedPayableKobo };
   });
 }
@@ -411,6 +413,7 @@ export async function updateRefundRequest({
       where: { id: refundRequestId },
       data: { ticketRefundKobo, platformFeeRefundKobo, totalRefundKobo, reason: reason.trim() },
     });
+    await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'REFUND_REQUEST_UPDATED', targetType: 'REFUND_REQUEST', targetId: refundRequestId, details: { ticketRefundKobo, platformFeeRefundKobo } } });
     return { totalRefundKobo };
   });
 }
@@ -429,6 +432,7 @@ export async function cancelRefundRequest({
     data: { status: 'CANCELLED' },
   });
   if (updated.count !== 1) throw new Error('refund request is unavailable to this organizer');
+  await database.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'REFUND_REQUEST_CANCELLED', targetType: 'REFUND_REQUEST', targetId: refundRequestId } });
 }
 
 export async function listOrganizerOrders({

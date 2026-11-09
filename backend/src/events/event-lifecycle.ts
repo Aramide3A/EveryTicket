@@ -27,6 +27,7 @@ export async function cancelOwnedEvent({
     await transaction.ticket.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'REVOKED' } });
     await transaction.guest.updateMany({ where: { guestList: { eventId }, credentialStatus: 'ACTIVE' }, data: { credentialStatus: 'REVOKED' } });
     await transaction.event.update({ where: { id: event.id }, data: { status: 'CANCELLED', cancelledAt: now, cancelledReason } });
+    await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'EVENT_CANCELLED', targetType: 'EVENT', targetId: event.id, details: { reason: cancelledReason } } });
   }, { isolationLevel: 'Serializable' });
 }
 
@@ -47,6 +48,7 @@ export async function removeOwnedEvent({
     if (!event) throw new Error('event is unavailable to this organizer');
     if (Object.values(event._count).some((count) => count > 0)) throw new Error('event has operational or financial activity');
     await transaction.ticketType.deleteMany({ where: { eventId } });
+    await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'EVENT_REMOVED', targetType: 'EVENT', targetId: event.id } });
     await transaction.event.delete({ where: { id: event.id } });
   }, { isolationLevel: 'Serializable' });
 }
