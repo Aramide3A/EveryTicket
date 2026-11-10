@@ -1,3 +1,5 @@
+import { getAdministrationEvent, getAdministrationProfile, getAdministrationOrder, getAdministrationRefund, getAdministrationPayout, getAdministrationFeeRule, getAdministrationAuditLog } from './administration-details.js';
+import { AdminDetailResponse } from './administration-detail-docs.js';
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, ServiceUnavailableException } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -17,6 +19,56 @@ const runAdministrationDatabaseOperation = createDatabaseOperation('administrati
 @Controller('admin')
 export class AdministrationController {
   private readonly withDatabase = runAdministrationDatabaseOperation;
+
+  @Get('events/:eventId')
+  @AdminDetailResponse('Event')
+  async eventDetail(@Req() request: Request, @Param('eventId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationEvent({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('users/:profileId')
+  @AdminDetailResponse('Profile')
+  async applicationProfileDetail(@Req() request: Request, @Param('profileId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationProfile({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('orders/:orderId')
+  @AdminDetailResponse('Order')
+  async orderDetail(@Req() request: Request, @Param('orderId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationOrder({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('refund-requests/:refundRequestId')
+  @AdminDetailResponse('Refund')
+  async refundRequestDetail(@Req() request: Request, @Param('refundRequestId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationRefund({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('payout-requests/:payoutRequestId')
+  @AdminDetailResponse('Payout')
+  async payoutRequestDetail(@Req() request: Request, @Param('payoutRequestId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationPayout({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('platform-fee-rule/:ruleId')
+  @AdminDetailResponse('FeeRule')
+  async platformFeeRuleDetail(@Req() request: Request, @Param('ruleId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationFeeRule({ database, adminProfileId: profile.id, id }));
+  }
+
+  @Get('audit-logs/:auditLogId')
+  @AdminDetailResponse('AuditLog')
+  async auditLogDetail(@Req() request: Request, @Param('auditLogId') id: string) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => getAdministrationAuditLog({ database, adminProfileId: profile.id, id }));
+  }
+
   @Get('summary')
   async summary(@Req() request: Request) {
     const profile = await requireActiveProfile(request, 'ADMIN');
