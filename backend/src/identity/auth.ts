@@ -122,7 +122,7 @@ export const auth = createAuth({
     process.env.PUBLIC_APP_URL,
     'http://localhost:5173',
     'https://everyticket.vercel.app',
-    'https://everticket-admin.vercel.app',
+    'https://everyticket-admin.vercel.app',
   ].filter((origin): origin is string => !!origin)
 });
 

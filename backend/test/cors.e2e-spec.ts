@@ -13,7 +13,7 @@ describe('CORS', () => {
     await app.close();
   });
 
-  it.each(['https://another-client.example', 'http://localhost:5173', 'https://everticket-admin.vercel.app'])('permits credentialed calls and preflight from %s', async (origin) => {
+  it.each(['https://another-client.example', 'http://localhost:5173', 'https://everyticket-admin.vercel.app'])('permits credentialed calls and preflight from %s', async (origin) => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/health/live')
       .set('Origin', origin)

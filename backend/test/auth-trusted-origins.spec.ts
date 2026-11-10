@@ -17,7 +17,7 @@ describe('Better Auth trusted origins', () => {
         'https://app.everythingticket.example',
         'http://localhost:5173',
         'https://everyticket.vercel.app',
-        'https://everticket-admin.vercel.app',
+        'https://everyticket-admin.vercel.app',
       ]));
       expect(auth.options.advanced?.useSecureCookies).toBe(true);
       expect(auth.options.advanced?.defaultCookieAttributes).toEqual(expect.objectContaining({
