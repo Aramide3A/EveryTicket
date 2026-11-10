@@ -79,6 +79,19 @@ describe('event catalogue', () => {
     }));
   });
 
+  it('finds a public event by its identifier as well as its slug', async () => {
+    const catalogue = await loadEventCatalogue();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(catalogue).toBeDefined();
+    if (!catalogue || !databaseUrl) throw new Error('event catalogue is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    await catalogue.publishOwnedEvent({ database: client, organizerProfileId: ids.profileId, eventId: ids.eventId, now: new Date('2032-01-01T10:00:00.000Z') });
+
+    await expect(catalogue.getPublicEvent({ database: client, slug: ids.eventId })).resolves.toEqual(expect.objectContaining({ id: ids.eventId, slug: 'design-summit' }));
+  });
+
   it('returns complete public presentation fields and only ready media', async () => {
     const catalogue = await loadEventCatalogue();
     const databaseUrl = process.env.DATABASE_URL;

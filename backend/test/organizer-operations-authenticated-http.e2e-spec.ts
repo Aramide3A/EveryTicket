@@ -35,6 +35,7 @@ describe('authenticated organizer operations HTTP contract', () => {
   afterEach(async () => {
     if (client) {
       if (ids.eventId) {
+        await client.$executeRaw`DELETE FROM event_media WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM ticket WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM "order" WHERE "eventId" = ${ids.eventId}`;
         await client.$executeRaw`DELETE FROM ticket_type WHERE "eventId" = ${ids.eventId}`;
@@ -97,6 +98,42 @@ describe('authenticated organizer operations HTTP contract', () => {
       .get(`/api/v1/organizer/events/${ids.eventId}/media`)
       .set('Cookie', cookie)
       .expect(200, []);
+  });
+
+  it('returns ready event images with the organizer event detail', async () => {
+    if (!client) throw new Error('database client is unavailable');
+    const readyMediaId = randomUUID();
+    await client.eventMedia.createMany({ data: [
+      { id: readyMediaId, eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/cover.png`, publicUrl: 'https://media.example.test/cover.png', contentType: 'image/png', contentLength: 1024, status: 'READY', isCover: true, expiresAt: new Date('2032-01-02T10:15:00.000Z'), completedAt: new Date() },
+      { id: randomUUID(), eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/pending.png`, publicUrl: 'https://media.example.test/pending.png', contentType: 'image/png', contentLength: 1024, status: 'PENDING', expiresAt: new Date('2032-01-02T10:15:00.000Z') },
+    ] });
+
+    const response = await request(app?.getHttpServer())
+      .get(`/api/v1/organizer/events/${ids.eventId}`)
+      .set('Cookie', cookie)
+      .expect(200);
+
+    expect(response.body).toEqual(expect.objectContaining({
+      id: ids.eventId,
+      media: [{ id: readyMediaId, publicUrl: 'https://media.example.test/cover.png', isCover: true }],
+    }));
+  });
+
+  it('returns ready event images with the organizer event list', async () => {
+    if (!client) throw new Error('database client is unavailable');
+    const readyMediaId = randomUUID();
+    await client.eventMedia.create({
+      data: { id: readyMediaId, eventId: ids.eventId, objectKey: `events/${ids.eventId}/media/card.png`, publicUrl: 'https://media.example.test/card.png', contentType: 'image/png', contentLength: 1024, status: 'READY', isCover: true, expiresAt: new Date('2032-01-02T10:15:00.000Z'), completedAt: new Date() },
+    });
+
+    const response = await request(app?.getHttpServer())
+      .get('/api/v1/organizer/events')
+      .set('Cookie', cookie)
+      .expect(200);
+
+    expect(response.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: ids.eventId, media: [{ id: readyMediaId, publicUrl: 'https://media.example.test/card.png', isCover: true }] }),
+    ]));
   });
 
   it('lets the signed-in owner cancel a published event with an explicit reason', async () => {

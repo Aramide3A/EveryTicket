@@ -162,7 +162,7 @@ export async function getPublicEvent({
   now?: Date;
 }): Promise<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; address: string; timeZone: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string; isCover: boolean }>; ticketTypes: Array<{ id: string; name: string; description: string | null; priceKobo: number; salesStartAt: Date | null; salesEndAt: Date | null; maxPerOrder: number | null; availableTickets: number }> } | null> {
   const event = await database.event.findFirst({
-    where: { slug, status: 'PUBLISHED', organizer: { status: 'ACTIVE' }, startAt: { gt: now } },
+    where: { OR: [{ slug }, { id: slug }], status: 'PUBLISHED', organizer: { status: 'ACTIVE' }, startAt: { gt: now } },
     select: { id: true, slug: true, title: true, description: true, city: true, state: true, venue: true, address: true, timeZone: true, startAt: true, endAt: true, category: { select: { name: true, slug: true } }, organizer: { select: { user: { select: { name: true } } } }, media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } }, ticketTypes: { where: { isActive: true }, orderBy: { priceKobo: 'asc' }, select: { id: true, name: true, description: true, priceKobo: true, salesStartAt: true, salesEndAt: true, maxPerOrder: true, capacity: true, tickets: { where: { status: 'ACTIVE' }, select: { id: true } }, holds: { where: { expiresAt: { gt: now } }, select: { quantity: true } } } } },
   });
   return event ? {

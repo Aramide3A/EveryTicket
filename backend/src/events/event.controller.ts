@@ -23,14 +23,28 @@ export class EventController {
   @ApiBearerAuth('session')
   async ownedEvents(@Req() request: Request) {
     const profile = await requireActiveProfile(request, 'ORGANIZER');
-    return runEventDatabaseOperation((database) => database.event.findMany({ where: { organizerProfileId: profile.id }, orderBy: { createdAt: 'desc' }, select: { id: true, title: true, slug: true, status: true, startAt: true, endAt: true } }));
+    return runEventDatabaseOperation((database) => database.event.findMany({
+      where: { organizerProfileId: profile.id },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, title: true, slug: true, status: true, startAt: true, endAt: true,
+        media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } },
+      },
+    }));
   }
 
   @Get('organizer/events/:eventId')
   @ApiBearerAuth('session')
   async ownedEvent(@Req() request: Request, @Param('eventId') eventId: string) {
     const profile = await requireActiveProfile(request, 'ORGANIZER');
-    return runEventDatabaseOperation((database) => database.event.findFirst({ where: { id: eventId, organizerProfileId: profile.id }, select: { id: true, categoryId: true, title: true, slug: true, description: true, city: true, state: true, venue: true, address: true, timeZone: true, startAt: true, endAt: true, status: true, ticketTypes: { orderBy: { createdAt: 'asc' }, select: { id: true, name: true, description: true, priceKobo: true, capacity: true, salesStartAt: true, salesEndAt: true, isActive: true, maxPerOrder: true } } } }));
+    return runEventDatabaseOperation((database) => database.event.findFirst({
+      where: { id: eventId, organizerProfileId: profile.id },
+      select: {
+        id: true, categoryId: true, title: true, slug: true, description: true, city: true, state: true, venue: true, address: true, timeZone: true, startAt: true, endAt: true, status: true,
+        media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } },
+        ticketTypes: { orderBy: { createdAt: 'asc' }, select: { id: true, name: true, description: true, priceKobo: true, capacity: true, salesStartAt: true, salesEndAt: true, isActive: true, maxPerOrder: true } },
+      },
+    }));
   }
 
   @Patch('organizer/events/:eventId')
