@@ -1,0 +1,6 @@
+# This repository is intentionally scoped to the backend service.
+/*
+!/.gitignore
+!/backend/
+!/backend/**
+**/.DS_Store
