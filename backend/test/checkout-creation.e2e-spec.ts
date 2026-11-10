@@ -15,6 +15,8 @@ type CreateCheckoutOrder = (input: {
   ticketSubtotalKobo: number;
   platformFeeKobo: number;
   totalKobo: number;
+  paystackFeeKobo: number;
+  paystackChargeKobo: number;
   guestAccessToken?: string;
 }>;
 
@@ -106,6 +108,8 @@ describe('checkout order creation', () => {
       ticketSubtotalKobo: 0,
       platformFeeKobo: 0,
       totalKobo: 0,
+      paystackFeeKobo: 0,
+      paystackChargeKobo: 0,
       guestAccessToken: expect.any(String),
     });
     const [order] = await client.$queryRaw<{ status: string }[]>`
@@ -155,6 +159,8 @@ describe('checkout order creation', () => {
       ticketSubtotalKobo: 1_000,
       platformFeeKobo: 500,
       totalKobo: 1_500,
+      paystackFeeKobo: 23,
+      paystackChargeKobo: 1_523,
       guestAccessToken: expect.any(String),
     });
     const [order] = await client.$queryRaw<{ status: string }[]>`

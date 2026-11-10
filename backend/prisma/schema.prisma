@@ -336,6 +336,8 @@ model Order {
   ticketSubtotalKobo               Int
   platformFeeKobo                  Int
   totalKobo                        Int
+  paystackFeeKobo                  Int                 @default(0)
+  paystackChargeKobo               Int                 @default(0)
   platformFeeRuleId                String
   platformFeeRuleVersion           Int
   platformFeeMode                  PlatformFeeMode

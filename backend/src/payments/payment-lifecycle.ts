@@ -18,7 +18,7 @@ export async function initializePayment({
   const attempt = await database.$transaction(async (transaction) => {
     const order = await transaction.order.findUnique({
       where: { reference: orderReference },
-      select: { id: true, buyerEmail: true, currency: true, status: true, totalKobo: true },
+      select: { id: true, buyerEmail: true, currency: true, status: true, totalKobo: true, paystackChargeKobo: true },
     });
     if (!order) {
       throw new Error('order was not found');
@@ -30,10 +30,10 @@ export async function initializePayment({
       data: {
         orderId: order.id,
         reference: paymentReference,
-        expectedAmountKobo: order.totalKobo,
+        expectedAmountKobo: order.paystackChargeKobo || order.totalKobo,
         currency: order.currency,
       },
-      select: { reference: true, expectedAmountKobo: true, currency: true, order: { select: { buyerEmail: true } } },
+      select: { reference: true, expectedAmountKobo: true, currency: true, order: { select: { buyerEmail: true, totalKobo: true, paystackChargeKobo: true } } },
     });
   });
 
@@ -41,7 +41,7 @@ export async function initializePayment({
     const authorization = await gateway.initializeTransaction({
       reference: attempt.reference,
       email: attempt.order.buyerEmail,
-      amountKobo: attempt.expectedAmountKobo,
+      amountKobo: orderTotalKobo(attempt.expectedAmountKobo, attempt.order.paystackChargeKobo, attempt.order.totalKobo),
       currency: attempt.currency,
     });
     await database.paymentAttempt.update({
@@ -56,6 +56,10 @@ export async function initializePayment({
     });
     throw error;
   }
+}
+
+function orderTotalKobo(expectedAmountKobo: number, paystackChargeKobo: number, totalKobo: number): number {
+  return paystackChargeKobo > 0 && paystackChargeKobo === expectedAmountKobo ? totalKobo : expectedAmountKobo;
 }
 
 export async function processVerifiedPayment({

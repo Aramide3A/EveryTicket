@@ -36,6 +36,8 @@ describe('calculateCheckoutQuote', () => {
       ticketSubtotalKobo: 3_300,
       platformFeeKobo: 83,
       totalKobo: 3_383,
+      paystackFeeKobo: 52,
+      paystackChargeKobo: 3_435,
     });
   });
 
@@ -55,6 +57,23 @@ describe('calculateCheckoutQuote', () => {
       ticketSubtotalKobo: 3_300,
       platformFeeKobo: 500,
       totalKobo: 3_800,
+      paystackFeeKobo: 58,
+      paystackChargeKobo: 3_858,
+    });
+  });
+
+  it('includes the final customer Paystack charge while retaining the merchant order total', async () => {
+    const calculateCheckoutQuote = await loadQuoteCalculator();
+
+    expect(calculateCheckoutQuote?.({
+      items: [{ quantity: 1, unitPriceKobo: 1_000_000 }],
+      platformFeeRule: { type: 'FIXED', amountKobo: 50_000 },
+    })).toEqual({
+      ticketSubtotalKobo: 1_000_000,
+      platformFeeKobo: 50_000,
+      totalKobo: 1_050_000,
+      paystackFeeKobo: 26_143,
+      paystackChargeKobo: 1_076_143,
     });
   });
 
@@ -71,6 +90,8 @@ describe('calculateCheckoutQuote', () => {
       ticketSubtotalKobo: 0,
       platformFeeKobo: 0,
       totalKobo: 0,
+      paystackFeeKobo: 0,
+      paystackChargeKobo: 0,
     });
     expect(
       calculateCheckoutQuote?.({
@@ -82,6 +103,8 @@ describe('calculateCheckoutQuote', () => {
       ticketSubtotalKobo: 0,
       platformFeeKobo: 500,
       totalKobo: 500,
+      paystackFeeKobo: 8,
+      paystackChargeKobo: 508,
     });
   });
 

@@ -141,7 +141,7 @@ describe('payment lifecycle', () => {
     ]);
     const attempts = await client.paymentAttempt.findMany({ where: { orderId: ids.orderId } });
     expect(attempts).toEqual([
-      expect.objectContaining({ expectedAmountKobo: 1_500, currency: 'NGN', status: 'INITIALIZED' }),
+      expect.objectContaining({ expectedAmountKobo: 1_523, currency: 'NGN', status: 'INITIALIZED' }),
     ]);
   });
 
@@ -167,7 +167,7 @@ describe('payment lifecycle', () => {
           reference,
           gatewayTransactionId: `gateway-${randomUUID()}`,
           status: 'success',
-          amountKobo: 1_500,
+          amountKobo: 1_523,
           currency: 'NGN',
           paidAt: new Date('2032-01-01T10:01:00.000Z'),
         };

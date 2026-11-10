@@ -2,11 +2,14 @@ import {
   calculatePlatformFeeKobo,
   type PlatformFeeRule,
 } from './platform-fee.js';
+import { calculatePaystackCustomerChargeKobo } from '../payments/paystack-customer-charge.js';
 
 export type CheckoutQuote = {
   ticketSubtotalKobo: number;
   platformFeeKobo: number;
   totalKobo: number;
+  paystackFeeKobo: number;
+  paystackChargeKobo: number;
 };
 
 export function calculateCheckoutQuote({
@@ -36,7 +39,8 @@ export function calculateCheckoutQuote({
     throw new RangeError('checkout total exceeds the supported kobo range');
   }
 
-  return { ticketSubtotalKobo, platformFeeKobo, totalKobo };
+  const paystackCharge = calculatePaystackCustomerChargeKobo(totalKobo);
+  return { ticketSubtotalKobo, platformFeeKobo, totalKobo, ...paystackCharge };
 }
 
 function calculateTicketSubtotalKobo(

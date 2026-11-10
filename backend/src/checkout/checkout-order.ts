@@ -29,6 +29,8 @@ export async function createCheckoutOrder({
   ticketSubtotalKobo: number;
   platformFeeKobo: number;
   totalKobo: number;
+  paystackFeeKobo: number;
+  paystackChargeKobo: number;
   guestAccessToken?: string;
 }> {
   if (!reference || !buyer.name || !buyer.email || items.length === 0) {
@@ -124,6 +126,7 @@ export async function createCheckoutOrder({
         reference, eventId, customerProfileId, buyerName: buyer.name, buyerEmail: buyer.email, buyerPhone: buyer.phone,
         guestAccessTokenDigest: guestAccessToken ? createHash('sha256').update(guestAccessToken).digest('hex') : null,
         ticketSubtotalKobo: quote.ticketSubtotalKobo, platformFeeKobo: quote.platformFeeKobo, totalKobo: quote.totalKobo,
+        paystackFeeKobo: quote.paystackFeeKobo, paystackChargeKobo: quote.paystackChargeKobo,
         platformFeeRuleId: feeRule.id, platformFeeRuleVersion: feeRule.version, platformFeeMode: feeRule.mode,
         platformFeePercentageBasisPoints: feeRule.percentageBasisPoints, platformFeeFixedAmountKobo: feeRule.fixedAmountKobo,
         holdExpiresAt,

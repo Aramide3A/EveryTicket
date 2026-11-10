@@ -1,0 +1,3 @@
+ALTER TABLE "order"
+  ADD COLUMN "paystackFeeKobo" INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN "paystackChargeKobo" INTEGER NOT NULL DEFAULT 0;
