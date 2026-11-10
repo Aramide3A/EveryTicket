@@ -17,7 +17,20 @@ export async function listCustomerOrders({
   status?: CustomerOrderStatus;
   page?: number;
   pageSize?: number;
-}): Promise<{ items: Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>; page: number; pageSize: number; total: number; totalPages: number }> {
+}): Promise<{
+  items: Array<{
+    reference: string;
+    status: string;
+    createdAt: Date;
+    event: { title: string; startAt: Date; venue: string };
+    lines: Array<{ ticketTypeName: string; quantity: number }>;
+    tickets: Array<{ id: string; ticketTypeName: string }>;
+  }>;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}> {
   if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new RangeError('order history pagination is invalid');
   const where = { customerProfileId, ...(status ? { status } : {}) };
   const [items, total] = await Promise.all([
@@ -29,6 +42,9 @@ export async function listCustomerOrders({
       select: {
         reference: true,
         status: true,
+        createdAt: true,
+        event: { select: { title: true, startAt: true, venue: true } },
+        lines: { select: { ticketTypeName: true, quantity: true }, orderBy: { createdAt: 'asc' } },
         tickets: { select: { id: true, ticketTypeName: true }, orderBy: { issuedAt: 'asc' } },
       },
     }),
@@ -45,15 +61,28 @@ export async function getCustomerOrder({
   database: PrismaClient;
   customerProfileId: string;
   orderReference: string;
-}): Promise<{ reference: string; status: string; ticketSubtotalKobo: number; platformFeeKobo: number; totalKobo: number; tickets: Array<{ id: string; ticketTypeName: string }> } | null> {
+}): Promise<{
+  reference: string;
+  status: string;
+  createdAt: Date;
+  ticketSubtotalKobo: number;
+  platformFeeKobo: number;
+  totalKobo: number;
+  event: { title: string; startAt: Date; venue: string };
+  lines: Array<{ ticketTypeName: string; quantity: number }>;
+  tickets: Array<{ id: string; ticketTypeName: string }>;
+} | null> {
   return database.order.findFirst({
     where: { reference: orderReference, customerProfileId },
     select: {
       reference: true,
       status: true,
+      createdAt: true,
       ticketSubtotalKobo: true,
       platformFeeKobo: true,
       totalKobo: true,
+      event: { select: { title: true, startAt: true, venue: true } },
+      lines: { select: { ticketTypeName: true, quantity: true }, orderBy: { createdAt: 'asc' } },
       tickets: { select: { id: true, ticketTypeName: true }, orderBy: { issuedAt: 'asc' } },
     },
   });

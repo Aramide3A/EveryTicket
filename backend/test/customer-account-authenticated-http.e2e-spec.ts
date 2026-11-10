@@ -63,7 +63,18 @@ describe('authenticated customer account HTTP contract', () => {
     const response = await request(app?.getHttpServer()).get('/api/v1/account/orders?status=PAID&page=1&pageSize=1').set('Cookie', cookie).expect(200);
 
     expect(response.body).toEqual({
-      items: [{ reference: 'http-paid-order', status: 'PAID', tickets: [] }],
+      items: [{
+        reference: 'http-paid-order',
+        status: 'PAID',
+        createdAt: '2032-01-01T10:01:00.000Z',
+        event: {
+          title: 'Customer account event',
+          startAt: '2032-01-02T10:00:00.000Z',
+          venue: 'Venue',
+        },
+        lines: [],
+        tickets: [],
+      }],
       page: 1,
       pageSize: 1,
       total: 1,
