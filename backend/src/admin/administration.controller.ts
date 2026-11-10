@@ -7,6 +7,7 @@ import { createDatabaseOperation } from '../persistence/database-operation.js';
 import { createPaystackGateway } from '../payments/paystack-gateway.js';
 import { pageAuditLogs } from '../audit/audit-log.js';
 import { createEventCategory, listEventCategoriesForAdmin, updateEventCategory } from './category-administration.js';
+import { setProfileAdministrator } from './admin-role-management.js';
 import { approvePayoutRequest, approveRefundRequest, blockProfile, executeApprovedRefund, getActivePlatformFeeRule, getAdministrationSummary, markPayoutPaid, markRefundProcessed, pageAdministrationEvents, pageAdministrationOrders, pageAdministrationPayoutRequests, pageAdministrationProfiles, pageAdministrationRefundRequests, reconcileExecutedRefund, rejectPayoutRequest, rejectRefundRequest, replacePlatformFeeRule, restoreEvent, setEventFeatured, suspendEvent, unblockProfile } from './administration.js';
 
 const runAdministrationDatabaseOperation = createDatabaseOperation('administration is not configured');
@@ -96,6 +97,17 @@ export class AdministrationController {
     const profile = await requireActiveProfile(request, 'ADMIN');
     await this.withDatabase((database) => unblockProfile({ database, adminProfileId: profile.id, profileId, now: new Date() }));
     return { unblocked: true };
+  }
+
+  @Patch('users/:profileId/administrator')
+  async setAdministrator(@Req() request: Request, @Param('profileId') profileId: string, @Body() body: unknown) {
+    const profile = await requireActiveProfile(request, 'ADMIN');
+    return this.withDatabase((database) => setProfileAdministrator({
+      database,
+      adminProfileId: profile.id,
+      profileId,
+      enabled: readBoolean(body, 'enabled'),
+    }));
   }
 
   @Get('orders')
