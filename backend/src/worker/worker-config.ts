@@ -13,7 +13,7 @@ export type WorkerConfig = {
 
 export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
   const redisUrl = required(environment, 'REDIS_URL');
-  if (!redisUrl.startsWith('rediss://')) throw new Error('REDIS_URL must use rediss for encrypted external Redis');
+  validateRedisUrl(redisUrl);
   return {
     databaseUrl: required(environment, 'DATABASE_URL'),
     redisUrl,
@@ -32,6 +32,19 @@ export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     },
     r2: readR2Config(environment),
   };
+}
+
+function validateRedisUrl(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('REDIS_URL must be a Redis URL');
+  }
+
+  if (url.protocol === 'rediss:') return;
+  if (url.protocol === 'redis:' && (url.hostname === 'railway.internal' || url.hostname.endsWith('.railway.internal'))) return;
+  throw new Error('REDIS_URL must use rediss for encrypted external Redis');
 }
 
 export function readR2Config(environment: NodeJS.ProcessEnv): WorkerConfig['r2'] {

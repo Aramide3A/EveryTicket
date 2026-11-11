@@ -66,4 +66,14 @@ describe('worker configuration', () => {
     expect(() => workerConfig.readWorkerConfig({ ...environment, REDIS_URL: 'redis://redis.example.test:6379' })).toThrow('REDIS_URL must use rediss');
     expect(() => workerConfig.readWorkerConfig({ ...environment, NOTIFICATION_POLL_INTERVAL_MS: '0' })).toThrow('NOTIFICATION_POLL_INTERVAL_MS');
   });
+
+  it('allows Railway private-network Redis without TLS', async () => {
+    const workerConfig = await loadWorkerConfig();
+    expect(workerConfig).toBeDefined();
+    if (!workerConfig) throw new Error('worker configuration is unavailable');
+
+    const redisUrl = 'redis://default:password@redis.railway.internal:6379';
+
+    expect(workerConfig.readWorkerConfig({ ...environment, REDIS_URL: redisUrl }).redisUrl).toBe(redisUrl);
+  });
 });
