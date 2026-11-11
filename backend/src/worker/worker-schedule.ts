@@ -8,16 +8,19 @@ export async function scheduleRecurringWork({
   notificationPollIntervalMs,
   documentPollIntervalMs,
   mediaCleanupIntervalMs,
+  orderExpiryIntervalMs,
 }: {
   queue: SchedulerQueue;
   paymentReconciliationIntervalMs: number;
   notificationPollIntervalMs: number;
   documentPollIntervalMs: number;
   mediaCleanupIntervalMs: number;
+  orderExpiryIntervalMs: number;
 }): Promise<void> {
   const options = { removeOnComplete: 100, removeOnFail: 1_000 };
   await queue.upsertJobScheduler('payment-reconciliation', { every: paymentReconciliationIntervalMs }, { name: 'payment-reconciliation', data: {}, opts: options });
   await queue.upsertJobScheduler('notification-delivery', { every: notificationPollIntervalMs }, { name: 'notification-delivery', data: {}, opts: options });
   await queue.upsertJobScheduler('ticket-document-delivery', { every: documentPollIntervalMs }, { name: 'ticket-document-delivery', data: {}, opts: options });
   await queue.upsertJobScheduler('expired-media-cleanup', { every: mediaCleanupIntervalMs }, { name: 'expired-media-cleanup', data: {}, opts: options });
+  await queue.upsertJobScheduler('order-expiry', { every: orderExpiryIntervalMs }, { name: 'order-expiry', data: {}, opts: options });
 }

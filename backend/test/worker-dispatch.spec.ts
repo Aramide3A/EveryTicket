@@ -6,6 +6,7 @@ type WorkerDispatchModule = {
       deliverNotifications(): Promise<void>;
       generateTicketDocuments(): Promise<void>;
       removeExpiredMedia(): Promise<void>;
+      expireOrders(): Promise<void>;
     };
   }): Promise<void>;
 };
@@ -29,12 +30,15 @@ describe('worker job dispatch', () => {
       deliverNotifications: async () => { calls.push('notifications'); },
       generateTicketDocuments: async () => { calls.push('documents'); },
       removeExpiredMedia: async () => { calls.push('media'); },
+      expireOrders: async () => { calls.push('orders'); },
     };
 
     await dispatch.executeWorkerJob({ name: 'ticket-document-delivery', handlers });
     expect(calls).toEqual(['documents']);
     await dispatch.executeWorkerJob({ name: 'expired-media-cleanup', handlers });
     expect(calls).toEqual(['documents', 'media']);
+    await dispatch.executeWorkerJob({ name: 'order-expiry', handlers });
+    expect(calls).toEqual(['documents', 'media', 'orders']);
     await expect(dispatch.executeWorkerJob({ name: 'unknown', handlers })).rejects.toThrow('unknown worker job');
   });
 });

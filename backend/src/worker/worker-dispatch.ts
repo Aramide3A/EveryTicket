@@ -8,11 +8,13 @@ export async function executeWorkerJob({
     deliverNotifications(): Promise<void>;
     generateTicketDocuments(): Promise<void>;
     removeExpiredMedia(): Promise<void>;
+    expireOrders(): Promise<void>;
   };
 }): Promise<void> {
   if (name === 'payment-reconciliation') return handlers.reconcilePayments();
   if (name === 'notification-delivery') return handlers.deliverNotifications();
   if (name === 'ticket-document-delivery') return handlers.generateTicketDocuments();
   if (name === 'expired-media-cleanup') return handlers.removeExpiredMedia();
+  if (name === 'order-expiry') return handlers.expireOrders();
   throw new Error(`unknown worker job: ${name}`);
 }

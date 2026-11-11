@@ -6,6 +6,7 @@ export type WorkerConfig = {
   notificationIntervalMs: number;
   documentPollIntervalMs: number;
   mediaCleanupIntervalMs: number;
+  orderExpiryIntervalMs: number;
   notificationMaxAttempts: number;
   smtp: { host: string; port: number; user: string; password: string; from: string };
   r2: { endpoint: string; bucket: string; accessKeyId: string; secretAccessKey: string; publicMediaUrl: string };
@@ -22,6 +23,7 @@ export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     notificationIntervalMs: positiveInteger(environment.NOTIFICATION_POLL_INTERVAL_MS, 'NOTIFICATION_POLL_INTERVAL_MS', 60_000),
     documentPollIntervalMs: positiveInteger(environment.DOCUMENT_POLL_INTERVAL_MS, 'DOCUMENT_POLL_INTERVAL_MS', 60_000),
     mediaCleanupIntervalMs: positiveInteger(environment.MEDIA_CLEANUP_INTERVAL_MS, 'MEDIA_CLEANUP_INTERVAL_MS', 3_600_000),
+    orderExpiryIntervalMs: positiveInteger(environment.ORDER_EXPIRY_INTERVAL_MS, 'ORDER_EXPIRY_INTERVAL_MS', 30_000),
     notificationMaxAttempts: positiveInteger(environment.NOTIFICATION_MAX_ATTEMPTS, 'NOTIFICATION_MAX_ATTEMPTS', 5),
     smtp: {
       host: required(environment, 'SMTP_HOST'),

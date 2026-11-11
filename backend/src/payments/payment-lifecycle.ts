@@ -1,6 +1,7 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { finalizePaidOrder } from './finalize-paid-order.js';
 import type { PaymentGateway } from './paystack-gateway.js';
+import { expirePendingOrder } from '../checkout/order-expiry.js';
 
 export async function initializePayment({
   database,
@@ -15,6 +16,7 @@ export async function initializePayment({
   paymentReference: string;
   now: Date;
 }): Promise<{ reference: string; authorizationUrl: string; accessCode: string }> {
+  await expirePendingOrder({ database, orderReference, now });
   const attempt = await database.$transaction(async (transaction) => {
     const order = await transaction.order.findUnique({
       where: { reference: orderReference },
@@ -122,7 +124,7 @@ export async function reconcilePendingPayments({
   now: Date;
 }): Promise<{ checked: number; paid: number; needsResolution: number }> {
   const attempts = await database.paymentAttempt.findMany({
-    where: { status: 'INITIALIZED', order: { status: 'PENDING_PAYMENT' } },
+    where: { status: 'INITIALIZED', initializedAt: { not: null }, order: { status: { in: ['PENDING_PAYMENT', 'EXPIRED'] } } },
     select: { reference: true },
   });
   let paid = 0;

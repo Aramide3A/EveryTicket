@@ -318,6 +318,32 @@ describe('administration', () => {
     await expect(client.notificationJob.count({ where: { recipientEmail: `${ids.targetUserId}@example.test`, type: 'REFUND_DECISION' } })).resolves.toBe(2);
   });
 
+  it('releases a failed refund for retry only after Paystack confirms the prior refund failed', async () => {
+    const administration = await loadAdministration();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!administration || !databaseUrl) throw new Error('administration is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createAdminFeeFixture(client, ids);
+    await createTargetProfile(client, ids);
+    await createPublishedEvent(client, ids);
+    await createRefundFixture(client, ids);
+    await administration.approveRefundRequest({ database: client, adminProfileId: ids.adminProfileId, refundRequestId: ids.refundRequestId, ticketRefundKobo: 2000, platformFeeRefundKobo: 100, reason: 'Validated refund amount', now: new Date('2031-06-01T00:00:00.000Z') });
+    await client.refundRequest.update({ where: { id: ids.refundRequestId }, data: { status: 'FAILED', gatewayRefundReference: 'refund-failed-1', gatewayStatus: 'failed' } });
+
+    const result = await administration.reconcileExecutedRefund({
+      database: client,
+      adminProfileId: ids.adminProfileId,
+      refundRequestId: ids.refundRequestId,
+      gateway: { fetchRefund: async (reference) => ({ reference, status: 'failed', amountKobo: 2100, currency: 'NGN' }) },
+      now: new Date('2031-06-02T00:00:00.000Z'),
+    });
+
+    expect(result.status).toBe('failed');
+    await expect(client.refundRequest.findUnique({ where: { id: ids.refundRequestId }, select: { status: true, gatewayRefundReference: true, gatewayStatus: true } })).resolves.toEqual({ status: 'APPROVED', gatewayRefundReference: null, gatewayStatus: 'retry-approved' });
+    await expect(client.auditLog.count({ where: { targetId: ids.refundRequestId, action: 'REFUND_RETRY_APPROVED' } })).resolves.toBe(1);
+  });
+
   it('records an approved payout as paid once an external transfer reference and date exist', async () => {
     const administration = await loadAdministration();
     const databaseUrl = process.env.DATABASE_URL;

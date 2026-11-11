@@ -2,7 +2,7 @@ import type { PrismaClient } from '../generated/prisma/client.js';
 import { randomUUID } from 'node:crypto';
 import { createTicketCredential } from '../worker/ticket-credential.js';
 
-export const customerOrderStatuses = ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const;
+export const customerOrderStatuses = ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const;
 export type CustomerOrderStatus = typeof customerOrderStatuses[number];
 
 export async function listCustomerOrders({

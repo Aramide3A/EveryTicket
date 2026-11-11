@@ -165,7 +165,7 @@ export class AdministrationController {
   @Get('orders')
   async orders(@Req() request: Request, @Query('q') query?: string, @Query('status') status?: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
     const profile = await requireActiveProfile(request, 'ADMIN');
-    return this.withDatabase((database) => pageAdministrationOrders({ database, adminProfileId: profile.id, query, status: readOptionalEnum(status, ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const), ...readPagination(page, pageSize) }));
+    return this.withDatabase((database) => pageAdministrationOrders({ database, adminProfileId: profile.id, query, status: readOptionalEnum(status, ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const), ...readPagination(page, pageSize) }));
   }
 
   @Get('refund-requests')

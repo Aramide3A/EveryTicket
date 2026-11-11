@@ -42,6 +42,8 @@ PUBLISHED --cancel (organizer)--> CANCELLED
 edited, or removed only while the event is a draft. A draft can be deleted only
 when it has no operational or financial records. The current implementation has
 no restore path from `CANCELLED` and no organizer path from `SUSPENDED`.
+Cancellation revokes admission, but paid orders remain `PAID`; any refund must
+follow the separate refund-request lifecycle.
 
 Sources: `src/events/event-catalogue.ts`, `src/events/event-lifecycle.ts`, and
 `src/admin/administration.ts`.
@@ -59,14 +61,12 @@ PENDING_PAYMENT --verified gateway payment + valid reservation--> PAID
   |                    `--payment after / without valid hold--> PAID_NEEDS_RESOLUTION
   |
   +--event cancellation--> CANCELLED
+  `--hold deadline + no verified payment--> EXPIRED
 ```
 
-The `OrderStatus` enum also contains `EXPIRED` and `FAILED`. No transition that
-writes either status is currently present in the mapped services. A failed
-gateway verification leaves a pending order retryable unless it is an integrity
-mismatch (which moves it to `PAID_NEEDS_RESOLUTION`). Reservation expiry is
-checked when fulfillment occurs, but currently produces `PAID_NEEDS_RESOLUTION`
-when money has arrived rather than an `EXPIRED` order.
+`FAILED` remains a legacy enum value with no order-level transition and is not
+offered as an order filter. A failed gateway attempt leaves its pending order
+retryable while the hold remains valid.
 
 | Transition | Guard | Side effects |
 | --- | --- | --- |
@@ -75,6 +75,8 @@ when money has arrived rather than an `EXPIRED` order.
 | `PENDING_PAYMENT` -> `PAID` | Gateway reference, amount and currency verify; inventory holds still exactly match the lines | Mark payment attempt `VERIFIED_SUCCESS`; issue tickets; queue PDFs and confirmation; release holds; set `paidAt` |
 | `PENDING_PAYMENT` -> `PAID_NEEDS_RESOLUTION` | Verified money arrived, but the hold has expired/is missing, or reference/amount/currency does not match | Retain verified-payment evidence, release holds when relevant, prevent another payment |
 | `PENDING_PAYMENT` -> `CANCELLED` | Event cancellation | Release holds as part of cancellation |
+| `PENDING_PAYMENT` -> `EXPIRED` | Server hold deadline has elapsed without fulfillment | Row-lock the order, release holds, and prevent new payment initialization |
+| `EXPIRED` -> `PAID_NEEDS_RESOLUTION` | Paystack subsequently verifies money for the expired reservation | Preserve verified-payment evidence; do not issue tickets automatically |
 
 An order may be accessed by its owning Customer session or, for a guest order,
 the matching private capability. The raw guest capability is returned only at
@@ -92,10 +94,10 @@ INITIALIZED --gateway failed--> VERIFIED_FAILED
 INITIALIZED --integrity mismatch--> VERIFIED_FAILED + order needs resolution
 ```
 
-`INITIALIZED` means the backend has created an attempt. A failure to initialise
-the external gateway records `failureDetail` but leaves that attempt in
-`INITIALIZED`; the order remains `PENDING_PAYMENT` so the purchaser can start a
-new attempt. Reconciliation processes initialized attempts for pending orders.
+`INITIALIZED` means the backend has created an attempt. `initializedAt = null`
+means the request never reached a usable Paystack checkout; the failure is
+recorded and the attempt is excluded from reconciliation. Reconciliation only
+processes initialized attempts with `initializedAt` set for pending orders.
 The order, not a single attempt, is the source of truth for fulfillment.
 
 ## Ticket and admission lifecycle
@@ -164,8 +166,12 @@ REQUESTED --organizer cancel--> CANCELLED
 Refunds are tied to selected tickets in a paid order. `REQUESTED` is the only
 organizer-editable state. Approval reserves the approved value; processing is
 claimed atomically so a gateway request cannot be started twice. A processed
-refund revokes the selected tickets and sends decision notifications. `FAILED`
-has no automatic retry transition in the current implementation.
+refund revokes the selected tickets and sends decision notifications. An admin
+may recover `FAILED` only by fetching the recorded provider refund first. A
+confirmed provider failure returns the request to `APPROVED` for a separately
+claimed retry; a processed result completes it; ambiguous or mismatched results
+remain `FAILED` for manual review. This prevents a second gateway refund from
+being started before the first outcome is known.
 
 Sources: `src/organizer/organizer-operations.ts` and
 `src/admin/administration.ts`.

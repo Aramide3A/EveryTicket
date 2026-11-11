@@ -335,16 +335,16 @@ export async function reconcileExecutedRefund({
     const [admin, processing] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
       transaction.refundRequest.findFirst({
-        where: { id: refundRequestId, status: 'PROCESSING', gatewayRefundReference: { not: null } },
-        select: { id: true, totalRefundKobo: true, gatewayRefundReference: true, gatewayStatus: true, order: { select: { currency: true } } },
+        where: { id: refundRequestId, status: { in: ['PROCESSING', 'FAILED'] }, gatewayRefundReference: { not: null } },
+        select: { id: true, status: true, totalRefundKobo: true, gatewayRefundReference: true, gatewayStatus: true, order: { select: { currency: true } } },
       }),
     ]);
     const gatewayRefundReference = processing?.gatewayRefundReference;
     const gatewayStatus = processing?.gatewayStatus;
     if (!admin || !processing || !gatewayRefundReference || !gatewayStatus || gatewayStatus === 'reconciling') throw new Error('refund is unavailable for this administrator');
     const claimed = await transaction.refundRequest.updateMany({
-      where: { id: processing.id, status: 'PROCESSING', gatewayStatus },
-      data: { gatewayStatus: 'reconciling' },
+      where: { id: processing.id, status: processing.status, gatewayStatus },
+      data: { status: 'PROCESSING', gatewayStatus: 'reconciling' },
     });
     if (claimed.count !== 1) throw new Error('refund is unavailable for this administrator');
     return { ...processing, gatewayRefundReference, gatewayStatus };
@@ -354,12 +354,20 @@ export async function reconcileExecutedRefund({
   try {
     result = await gateway.fetchRefund(refund.gatewayRefundReference);
   } catch (error) {
-    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING', gatewayStatus: 'reconciling' }, data: { gatewayStatus: refund.gatewayStatus } });
+    await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING', gatewayStatus: 'reconciling' }, data: { status: refund.status, gatewayStatus: refund.gatewayStatus } });
     throw error;
   }
   if (result.reference !== refund.gatewayRefundReference || result.amountKobo !== refund.totalRefundKobo || result.currency !== refund.order.currency) {
     await database.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING' }, data: { status: 'FAILED', gatewayStatus: 'response-mismatch' } });
     throw new Error('Paystack refund response does not match the approved refund');
+  }
+  if (refund.status === 'FAILED' && result.status === 'failed') {
+    await database.$transaction(async (transaction) => {
+      const released = await transaction.refundRequest.updateMany({ where: { id: refund.id, status: 'PROCESSING', gatewayStatus: 'reconciling' }, data: { status: 'APPROVED', gatewayRefundReference: null, gatewayStatus: 'retry-approved' } });
+      if (released.count !== 1) throw new Error('refund recovery lost its claim');
+      await transaction.auditLog.create({ data: { actorProfileId: adminProfileId, action: 'REFUND_RETRY_APPROVED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { confirmedFailedReference: result.reference } } });
+    });
+    return result;
   }
   await applyRefundProviderResult({ database, adminProfileId, refundRequestId: refund.id, result, now, auditAction: result.status === 'processed' ? 'REFUND_PROCESSED' : 'REFUND_RECONCILED' });
   return result;
@@ -385,7 +393,7 @@ async function applyRefundProviderResult({
       where: { id: refundRequestId },
       select: { organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } },
     });
-    const status = result.status === 'processed' ? 'PROCESSED' : result.status === 'failed' ? 'FAILED' : 'PROCESSING';
+    const status = result.status === 'processed' ? 'PROCESSED' : result.status === 'failed' || result.status === 'needs-attention' ? 'FAILED' : 'PROCESSING';
     await transaction.refundRequest.update({
       where: { id: refundRequestId },
       data: { status, gatewayRefundReference: result.reference, gatewayStatus: result.status, ...(status === 'PROCESSED' ? { processedAt: now } : {}) },
@@ -613,7 +621,7 @@ export async function pageAdministrationProfiles({ database, adminProfileId, que
   return { items, page, pageSize, total };
 }
 
-export async function pageAdministrationOrders({ database, adminProfileId, query, status, page, pageSize, skip }: { database: PrismaClient; adminProfileId: string; query?: string; status?: 'PENDING_PAYMENT' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION'; page: number; pageSize: number; skip: number }) {
+export async function pageAdministrationOrders({ database, adminProfileId, query, status, page, pageSize, skip }: { database: PrismaClient; adminProfileId: string; query?: string; status?: 'PENDING_PAYMENT' | 'PAID' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION'; page: number; pageSize: number; skip: number }) {
   await requireActiveAdministrator(database, adminProfileId);
   const text = query?.trim();
   const where = { ...(status ? { status } : {}), ...(text ? { OR: [{ reference: { contains: text, mode: 'insensitive' as const } }, { buyerEmail: { contains: text, mode: 'insensitive' as const } }, { paymentAttempts: { some: { reference: { contains: text, mode: 'insensitive' as const } } } }] } : {}) };

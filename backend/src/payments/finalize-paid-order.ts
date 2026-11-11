@@ -43,6 +43,12 @@ export async function finalizePaidOrder({
     if (order.status === 'PAID_NEEDS_RESOLUTION') {
       return { orderStatus: 'PAID_NEEDS_RESOLUTION', ticketsIssued: 0 };
     }
+    if (order.status === 'EXPIRED') {
+      const attempt = await transaction.paymentAttempt.findUniqueOrThrow({ where: { reference: paymentReference }, select: { id: true } });
+      await transaction.paymentAttempt.update({ where: { id: attempt.id }, data: { status: 'VERIFIED_SUCCESS', gatewayTransactionId, verifiedAt: paidAt, failureDetail: 'Payment was verified after the reservation expired' } });
+      await transaction.order.update({ where: { id: order.id }, data: { status: 'PAID_NEEDS_RESOLUTION' } });
+      return { orderStatus: 'PAID_NEEDS_RESOLUTION', ticketsIssued: 0 };
+    }
     if (order.status !== 'PENDING_PAYMENT') {
       throw new Error('order cannot be finalized');
     }

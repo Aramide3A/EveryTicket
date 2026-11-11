@@ -32,7 +32,7 @@ export class OrganizerController {
   @Get('events/:eventId/orders')
   async orders(@Req() request: Request, @Param('eventId') eventId: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('q') query?: string, @Query('status') status?: string) {
     const profile = await requireActiveProfile(request, 'ORGANIZER');
-    return this.withDatabase((database) => pageOrganizerOrders({ database, organizerProfileId: profile.id, eventId, query, status: readOptionalEnum(status, ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const), ...readPagination(page, pageSize) }));
+    return this.withDatabase((database) => pageOrganizerOrders({ database, organizerProfileId: profile.id, eventId, query, status: readOptionalEnum(status, ['PENDING_PAYMENT', 'PAID', 'CANCELLED', 'EXPIRED', 'PAID_NEEDS_RESOLUTION'] as const), ...readPagination(page, pageSize) }));
   }
 
   @Get('orders/:orderId/refund-inputs')

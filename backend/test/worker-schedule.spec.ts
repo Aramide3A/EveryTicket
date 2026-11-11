@@ -5,6 +5,7 @@ type WorkerScheduleModule = {
     notificationPollIntervalMs: number;
     documentPollIntervalMs: number;
     mediaCleanupIntervalMs: number;
+    orderExpiryIntervalMs: number;
   }): Promise<void>;
 };
 
@@ -29,6 +30,7 @@ describe('worker recurring schedules', () => {
       notificationPollIntervalMs: 60_000,
       documentPollIntervalMs: 60_000,
       mediaCleanupIntervalMs: 3_600_000,
+      orderExpiryIntervalMs: 30_000,
     });
 
     expect(registrations).toEqual([
@@ -36,6 +38,7 @@ describe('worker recurring schedules', () => {
       { id: 'notification-delivery', repeat: { every: 60_000 }, template: { name: 'notification-delivery', data: {}, opts: { removeOnComplete: 100, removeOnFail: 1_000 } } },
       { id: 'ticket-document-delivery', repeat: { every: 60_000 }, template: { name: 'ticket-document-delivery', data: {}, opts: { removeOnComplete: 100, removeOnFail: 1_000 } } },
       { id: 'expired-media-cleanup', repeat: { every: 3_600_000 }, template: { name: 'expired-media-cleanup', data: {}, opts: { removeOnComplete: 100, removeOnFail: 1_000 } } },
+      { id: 'order-expiry', repeat: { every: 30_000 }, template: { name: 'order-expiry', data: {}, opts: { removeOnComplete: 100, removeOnFail: 1_000 } } },
     ]);
   });
 });

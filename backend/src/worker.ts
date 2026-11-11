@@ -6,6 +6,7 @@ import { readPaymentReconciliationInterval } from './payments/reconciliation-con
 import { removeExpiredMediaUploads } from './media/event-media-operations.js';
 import { deliverPendingNotifications } from './worker/notification-delivery.js';
 import { createR2ObjectStore } from './worker/r2-object-store.js';
+import { expirePendingOrders } from './checkout/order-expiry.js';
 import { createSmtpEmailSender } from './worker/smtp-email-sender.js';
 import { processPendingTicketDocuments } from './worker/ticket-document-delivery.js';
 import { readWorkerConfig } from './worker/worker-config.js';
@@ -35,6 +36,7 @@ export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ clo
       deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
       generateTicketDocuments: async () => withDatabase((database) => processPendingTicketDocuments({ database, objectStore, ticketCredentialSecret: config.admissionTokenSecret, now: new Date() }).then(() => undefined)),
       removeExpiredMedia: async () => withDatabase((database) => removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }).then(() => undefined)),
+      expireOrders: async () => withDatabase((database) => expirePendingOrders({ database, now: new Date() }).then(() => undefined)),
     },
   }), { connection });
 
@@ -49,6 +51,7 @@ export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ clo
       notificationPollIntervalMs: config.notificationIntervalMs,
       documentPollIntervalMs: config.documentPollIntervalMs,
       mediaCleanupIntervalMs: config.mediaCleanupIntervalMs,
+      orderExpiryIntervalMs: config.orderExpiryIntervalMs,
     });
   } catch (error) {
     await Promise.allSettled([worker.close(), queue.close()]);

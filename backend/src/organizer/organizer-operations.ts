@@ -452,7 +452,7 @@ export async function listOrganizerOrders({
   });
 }
 
-export async function pageOrganizerOrders({ database, organizerProfileId, eventId, page, pageSize, skip, query, status }: { database: PrismaClient; organizerProfileId: string; eventId: string; page: number; pageSize: number; skip: number; query?: string; status?: 'PENDING_PAYMENT' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION' }): Promise<Page<Awaited<ReturnType<typeof listOrganizerOrders>>[number]>> {
+export async function pageOrganizerOrders({ database, organizerProfileId, eventId, page, pageSize, skip, query, status }: { database: PrismaClient; organizerProfileId: string; eventId: string; page: number; pageSize: number; skip: number; query?: string; status?: 'PENDING_PAYMENT' | 'PAID' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION' }): Promise<Page<Awaited<ReturnType<typeof listOrganizerOrders>>[number]>> {
   await requireOwnedEvent(database, organizerProfileId, eventId);
   const text = query?.trim();
   const where = { eventId, ...(status ? { status } : {}), ...(text ? { OR: [{ reference: { contains: text, mode: 'insensitive' as const } }, { buyerName: { contains: text, mode: 'insensitive' as const } }, { buyerEmail: { contains: text, mode: 'insensitive' as const } }] } : {}) };

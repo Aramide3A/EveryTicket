@@ -53,6 +53,7 @@ describe('worker configuration', () => {
       documentPollIntervalMs: 60_000,
       mediaCleanupIntervalMs: 3_600_000,
       notificationMaxAttempts: 5,
+      orderExpiryIntervalMs: 30_000,
       smtp: { host: environment.SMTP_HOST, port: 587, user: environment.SMTP_USER, password: environment.SMTP_PASSWORD, from: environment.EMAIL_FROM },
       r2: { endpoint: environment.R2_ENDPOINT, bucket: environment.R2_BUCKET, accessKeyId: environment.R2_ACCESS_KEY_ID, secretAccessKey: environment.R2_SECRET_ACCESS_KEY, publicMediaUrl: environment.R2_PUBLIC_MEDIA_URL },
     });

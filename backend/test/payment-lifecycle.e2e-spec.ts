@@ -56,22 +56,30 @@ type ReconcilePendingPayments = (input: {
   now: Date;
 }) => Promise<{ checked: number; paid: number; needsResolution: number }>;
 
+type ExpirePendingOrders = (input: {
+  database: ReturnType<typeof createDatabaseClient>;
+  now: Date;
+}) => Promise<{ checked: number; expired: number }>;
+
 async function loadDependencies(): Promise<{
   createCheckoutOrder?: CreateCheckoutOrder;
   initializePayment?: InitializePayment;
   processVerifiedPayment?: ProcessVerifiedPayment;
   reconcilePendingPayments?: ReconcilePendingPayments;
+  expirePendingOrders?: ExpirePendingOrders;
 }> {
   try {
-    const [checkout, payments] = await Promise.all([
+    const [checkout, payments, expiry] = await Promise.all([
       import('../src/checkout/checkout-order.js'),
       import('../src/payments/payment-lifecycle.js'),
+      import('../src/checkout/order-expiry.js'),
     ]);
     return {
       createCheckoutOrder: checkout.createCheckoutOrder,
       initializePayment: payments.initializePayment,
       processVerifiedPayment: payments.processVerifiedPayment,
       reconcilePendingPayments: payments.reconcilePendingPayments,
+      expirePendingOrders: expiry.expirePendingOrders,
     };
   } catch {
     return {};
@@ -261,6 +269,56 @@ describe('payment lifecycle', () => {
       reconcilePendingPayments({ database: client, gateway, now: new Date('2032-01-01T10:02:00.000Z') }),
     ).resolves.toEqual({ checked: 1, paid: 1, needsResolution: 0 });
     expect((await client.order.findUniqueOrThrow({ where: { id: ids.orderId } })).status).toBe('PAID');
+  });
+
+  it('does not reconcile a payment attempt when gateway initialization failed', async () => {
+    const { createCheckoutOrder, initializePayment, reconcilePendingPayments } = await loadDependencies();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!createCheckoutOrder || !initializePayment || !reconcilePendingPayments || !databaseUrl) throw new Error('payment dependencies are unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const order = await createPaidOrder(client, ids, createCheckoutOrder);
+    let verificationCalls = 0;
+    const gateway: PaymentGateway = {
+      async initializeTransaction() { throw new Error('gateway unavailable'); },
+      async verifyTransaction(reference) { verificationCalls += 1; return { reference, gatewayTransactionId: 'unused', status: 'pending', amountKobo: 1_523, currency: 'NGN' }; },
+    };
+    await expect(initializePayment({ database: client, gateway, orderReference: order.reference, paymentReference: `pay-${randomUUID()}`, now: new Date('2032-01-01T10:00:05.000Z') })).rejects.toThrow('gateway unavailable');
+    await expect(reconcilePendingPayments({ database: client, gateway, now: new Date('2032-01-01T10:02:00.000Z') })).resolves.toEqual({ checked: 0, paid: 0, needsResolution: 0 });
+    expect(verificationCalls).toBe(0);
+  });
+
+  it('expires an elapsed unpaid reservation and releases its inventory hold', async () => {
+    const { createCheckoutOrder, expirePendingOrders } = await loadDependencies();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!createCheckoutOrder || !expirePendingOrders || !databaseUrl) throw new Error('expiry dependencies are unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    await createPaidOrder(client, ids, createCheckoutOrder);
+    await expect(expirePendingOrders({ database: client, now: new Date('2032-01-01T10:10:01.000Z') })).resolves.toEqual({ checked: 1, expired: 1 });
+    expect((await client.order.findUniqueOrThrow({ where: { id: ids.orderId } })).status).toBe('EXPIRED');
+    expect(await client.inventoryHold.count({ where: { orderId: ids.orderId } })).toBe(0);
+  });
+
+  it('quarantines a verified payment when expiry wins the reservation race', async () => {
+    const { createCheckoutOrder, initializePayment, processVerifiedPayment, expirePendingOrders } = await loadDependencies();
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!createCheckoutOrder || !initializePayment || !processVerifiedPayment || !expirePendingOrders || !databaseUrl) throw new Error('payment dependencies are unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    const order = await createPaidOrder(client, ids, createCheckoutOrder);
+    const paymentReference = `pay-${randomUUID()}`;
+    const gateway: PaymentGateway = {
+      async initializeTransaction() { return { authorizationUrl: 'https://checkout.paystack.test/race', accessCode: 'race' }; },
+      async verifyTransaction(reference) { return { reference, gatewayTransactionId: 'gateway-race', status: 'success', amountKobo: 1_523, currency: 'NGN', paidAt: new Date('2032-01-01T10:10:01.000Z') }; },
+    };
+    await initializePayment({ database: client, gateway, orderReference: order.reference, paymentReference, now: new Date('2032-01-01T10:00:01.000Z') });
+    await expirePendingOrders({ database: client, now: new Date('2032-01-01T10:10:01.000Z') });
+    await expect(processVerifiedPayment({ database: client, gateway, paymentReference, now: new Date('2032-01-01T10:10:02.000Z') })).resolves.toEqual({ orderStatus: 'PAID_NEEDS_RESOLUTION', ticketsIssued: 0 });
+    expect(await client.ticket.count({ where: { orderId: ids.orderId } })).toBe(0);
   });
 
   it('does not issue tickets automatically when Paystack records payment after the inventory hold expired', async () => {

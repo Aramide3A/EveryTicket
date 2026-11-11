@@ -5,7 +5,7 @@ type CustomerTicketAccess = {
   listCustomerOrders(input: {
     database: ReturnType<typeof createDatabaseClient>;
     customerProfileId: string;
-    status?: 'PENDING_PAYMENT' | 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION';
+    status?: 'PENDING_PAYMENT' | 'PAID' | 'CANCELLED' | 'EXPIRED' | 'PAID_NEEDS_RESOLUTION';
     page?: number;
     pageSize?: number;
   }): Promise<{ items: Array<{ reference: string; status: string; tickets: Array<{ id: string; ticketTypeName: string }> }>; page: number; pageSize: number; total: number; totalPages: number }>;
