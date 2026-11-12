@@ -1,10 +1,12 @@
 import { INestApplication } from '@nestjs/common';
+import type { CustomOrigin } from '@nestjs/common/interfaces/external/cors-options.interface.js';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 import { createRequestRateLimiter, readRequestRateLimit } from './common/http/request-rate-limit.js';
+import { trustedOrigins } from './identity/trusted-origins.js';
 
 export async function createApi(): Promise<INestApplication> {
   const app = await NestFactory.create(AppModule, { logger: false, rawBody: true });
@@ -34,7 +36,14 @@ export async function createApi(): Promise<INestApplication> {
     response.status(429).json({ statusCode: 429, error: 'Too Many Requests', message: 'request rate limit exceeded' });
   });
 
-  app.enableCors({ origin: true, credentials: true });
+  const corsOrigins = new Set(trustedOrigins());
+  const allowTrustedOrigin: CustomOrigin = (origin, callback) => {
+    callback(null, !origin || corsOrigins.has(origin));
+  };
+  app.enableCors({
+    credentials: true,
+    origin: allowTrustedOrigin,
+  });
 
   app.use(helmet());
 

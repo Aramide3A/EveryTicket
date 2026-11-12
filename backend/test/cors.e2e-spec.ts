@@ -13,7 +13,7 @@ describe('CORS', () => {
     await app.close();
   });
 
-  it.each(['https://another-client.example', 'http://localhost:5173', 'https://everyticket-admin.vercel.app'])('permits credentialed calls and preflight from %s', async (origin) => {
+  it.each(['http://localhost:5173', 'https://everyticket-admin.vercel.app', 'https://www.geteveryticket.com'])('permits credentialed calls and preflight from %s', async (origin) => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/health/live')
       .set('Origin', origin)
@@ -28,5 +28,15 @@ describe('CORS', () => {
       .expect(204);
     expect(preflight.headers['access-control-allow-origin']).toBe(origin);
     expect(preflight.headers['access-control-allow-credentials']).toBe('true');
+  });
+
+  it('does not grant credentialed browser access to an untrusted origin', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/health/live')
+      .set('Origin', 'https://untrusted-client.example')
+      .expect(200);
+
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    expect(response.headers['access-control-allow-credentials']).toBeUndefined();
   });
 });

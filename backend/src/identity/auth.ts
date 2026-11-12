@@ -4,6 +4,7 @@ import type { PrismaClient } from '../generated/prisma/client.js';
 import { createDatabaseClient } from '../persistence/prisma-client.js';
 import { createSmtpEmailSender } from '../worker/smtp-email-sender.js';
 import { linkGuestOrdersForVerifiedUser } from './guest-order-link.js';
+import { trustedOrigins } from './trusted-origins.js';
 
 type AuthOptions = {
   baseUrl: string;
@@ -118,12 +119,7 @@ export const auth = createAuth({
     subject: 'Reset your EverythingTicket password',
     text: `Reset your EverythingTicket password using this secure link: ${url}`,
   }) : undefined,
-  trustedOrigins: [
-    process.env.PUBLIC_APP_URL,
-    'http://localhost:5173',
-    'https://everyticket.vercel.app',
-    'https://everyticket-admin.vercel.app',
-  ].filter((origin): origin is string => !!origin)
+  trustedOrigins: trustedOrigins(),
 });
 
 function requiredEnvironment(name: string): string {
