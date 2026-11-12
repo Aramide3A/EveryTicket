@@ -4,6 +4,7 @@ const staticTrustedOrigins = [
   'https://everyticket.vercel.app',
   'https://everyticket-admin.vercel.app',
   'https://www.geteveryticket.com',
+  'https://admin.geteveryticket.com',
 ];
 
 export function trustedOrigins(environment: NodeJS.ProcessEnv = process.env): string[] {
