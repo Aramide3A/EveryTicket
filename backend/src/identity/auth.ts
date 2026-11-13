@@ -3,6 +3,7 @@ import { prismaAdapter } from 'better-auth/adapters/prisma';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { createDatabaseClient } from '../persistence/prisma-client.js';
 import { createResendEmailSender } from '../worker/resend-email-sender.js';
+import { withFrontendVerificationCallback } from './email-verification-url.js';
 import { linkGuestOrdersForVerifiedUser } from './guest-order-link.js';
 import { trustedOrigins } from './trusted-origins.js';
 
@@ -88,6 +89,7 @@ export function createAuth({
 
 const databaseUrl = process.env.DATABASE_URL;
 const secret = process.env.BETTER_AUTH_SECRET;
+const publicAppUrl = requiredEnvironment('PUBLIC_APP_URL');
 
 if (!databaseUrl || !secret) {
   throw new Error('DATABASE_URL and BETTER_AUTH_SECRET must be set');
@@ -112,7 +114,7 @@ export const auth = createAuth({
   sendVerificationEmail: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
     to: user.email,
     subject: 'Verify your EverythingTicket email',
-    text: `Verify your email address to access your EverythingTicket account: ${url}`,
+    text: `Verify your email address to access your EverythingTicket account: ${withFrontendVerificationCallback(url, publicAppUrl)}`,
   }) : undefined,
   sendResetPassword: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
     to: user.email,
