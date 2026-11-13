@@ -2,7 +2,7 @@ import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { createDatabaseClient } from '../persistence/prisma-client.js';
-import { createSmtpEmailSender } from '../worker/smtp-email-sender.js';
+import { createResendEmailSender } from '../worker/resend-email-sender.js';
 import { linkGuestOrdersForVerifiedUser } from './guest-order-link.js';
 import { trustedOrigins } from './trusted-origins.js';
 
@@ -78,7 +78,10 @@ export function createAuth({
       },
       database: {
         joins: true
-      }
+      },
+      ipAddress: {
+        ipAddressHeaders: ['x-real-ip'],
+      },
     }
   });
 }
@@ -93,12 +96,9 @@ if (!databaseUrl || !secret) {
 export const authDatabase = createDatabaseClient(databaseUrl);
 
 const emailVerificationEnabled = process.env.NODE_ENV !== 'test';
-const verificationEmailSender = emailVerificationEnabled ? createSmtpEmailSender({
+const verificationEmailSender = emailVerificationEnabled ? createResendEmailSender({
   config: {
-    host: requiredEnvironment('SMTP_HOST'),
-    port: Number(process.env.SMTP_PORT ?? '587'),
-    user: requiredEnvironment('SMTP_USER'),
-    password: requiredEnvironment('SMTP_PASSWORD'),
+    apiKey: requiredEnvironment('RESEND_API_KEY'),
     from: requiredEnvironment('EMAIL_FROM'),
   },
 }) : undefined;

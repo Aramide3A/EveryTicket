@@ -26,6 +26,9 @@ describe('Better Auth trusted origins', () => {
         sameSite: 'none',
         secure: true,
       }));
+      expect(auth.options.advanced?.ipAddress).toEqual({
+        ipAddressHeaders: ['x-real-ip'],
+      });
     } finally {
       if (previous.databaseUrl === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = previous.databaseUrl;

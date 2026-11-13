@@ -8,7 +8,7 @@ type WorkerConfigModule = {
     documentPollIntervalMs: number;
     mediaCleanupIntervalMs: number;
     notificationMaxAttempts: number;
-    smtp: { host: string; port: number; user: string; password: string; from: string };
+    resend: { apiKey: string; from: string };
     r2: { endpoint: string; bucket: string; accessKeyId: string; secretAccessKey: string; publicMediaUrl: string };
   };
 };
@@ -26,10 +26,7 @@ const environment: NodeJS.ProcessEnv = {
   REDIS_URL: 'rediss://user:password@redis.example.test:6380',
   PAYSTACK_SECRET_KEY: 'sk_test_value',
   ADMISSION_TOKEN_SECRET: 'a-long-ticket-credential-secret',
-  SMTP_HOST: 'smtp.example.test',
-  SMTP_PORT: '587',
-  SMTP_USER: 'smtp-user',
-  SMTP_PASSWORD: 'smtp-password',
+  RESEND_API_KEY: 're_test_key',
   EMAIL_FROM: 'EverythingTicket <no-reply@example.test>',
   R2_ENDPOINT: 'https://account.r2.cloudflarestorage.com',
   R2_BUCKET: 'everythingticket-private',
@@ -53,7 +50,7 @@ describe('worker configuration', () => {
       documentPollIntervalMs: 60_000,
       mediaCleanupIntervalMs: 3_600_000,
       notificationMaxAttempts: 5,
-      smtp: { host: environment.SMTP_HOST, port: 587, user: environment.SMTP_USER, password: environment.SMTP_PASSWORD, from: environment.EMAIL_FROM },
+      resend: { apiKey: environment.RESEND_API_KEY, from: environment.EMAIL_FROM },
       r2: { endpoint: environment.R2_ENDPOINT, bucket: environment.R2_BUCKET, accessKeyId: environment.R2_ACCESS_KEY_ID, secretAccessKey: environment.R2_SECRET_ACCESS_KEY, publicMediaUrl: environment.R2_PUBLIC_MEDIA_URL },
     });
   });

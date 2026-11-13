@@ -7,7 +7,7 @@ export type WorkerConfig = {
   documentPollIntervalMs: number;
   mediaCleanupIntervalMs: number;
   notificationMaxAttempts: number;
-  smtp: { host: string; port: number; user: string; password: string; from: string };
+  resend: { apiKey: string; from: string };
   r2: { endpoint: string; bucket: string; accessKeyId: string; secretAccessKey: string; publicMediaUrl: string };
 };
 
@@ -23,11 +23,8 @@ export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
     documentPollIntervalMs: positiveInteger(environment.DOCUMENT_POLL_INTERVAL_MS, 'DOCUMENT_POLL_INTERVAL_MS', 60_000),
     mediaCleanupIntervalMs: positiveInteger(environment.MEDIA_CLEANUP_INTERVAL_MS, 'MEDIA_CLEANUP_INTERVAL_MS', 3_600_000),
     notificationMaxAttempts: positiveInteger(environment.NOTIFICATION_MAX_ATTEMPTS, 'NOTIFICATION_MAX_ATTEMPTS', 5),
-    smtp: {
-      host: required(environment, 'SMTP_HOST'),
-      port: positiveInteger(environment.SMTP_PORT, 'SMTP_PORT', 587),
-      user: required(environment, 'SMTP_USER'),
-      password: required(environment, 'SMTP_PASSWORD'),
+    resend: {
+      apiKey: required(environment, 'RESEND_API_KEY'),
       from: required(environment, 'EMAIL_FROM'),
     },
     r2: readR2Config(environment),

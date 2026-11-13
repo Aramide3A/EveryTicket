@@ -6,7 +6,7 @@ import { readPaymentReconciliationInterval } from './payments/reconciliation-con
 import { removeExpiredMediaUploads } from './media/event-media-operations.js';
 import { deliverPendingNotifications } from './worker/notification-delivery.js';
 import { createR2ObjectStore } from './worker/r2-object-store.js';
-import { createSmtpEmailSender } from './worker/smtp-email-sender.js';
+import { createResendEmailSender } from './worker/resend-email-sender.js';
 import { processPendingTicketDocuments } from './worker/ticket-document-delivery.js';
 import { readWorkerConfig } from './worker/worker-config.js';
 import { executeWorkerJob } from './worker/worker-dispatch.js';
@@ -25,7 +25,7 @@ export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ clo
   const connection = { url: config.redisUrl, maxRetriesPerRequest: null };
   const queue = new Queue('everythingticket-worker', { connection });
   const gateway = createPaystackGateway({ secretKey: config.paystackSecretKey });
-  const sender = createSmtpEmailSender({ config: config.smtp });
+  const sender = createResendEmailSender({ config: config.resend });
   const objectStore = createR2ObjectStore({ config: config.r2 });
 
   const worker = new Worker('everythingticket-worker', async (job) => executeWorkerJob({
