@@ -1,6 +1,7 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { Page } from '../common/http/pagination.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 const ACTIVE_REFUND_STATUSES = ['REQUESTED', 'APPROVED', 'PROCESSING', 'PROCESSED'] as const;
 
@@ -252,7 +253,7 @@ export async function createRefundRequest({
         status: 'PAID',
         event: { organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
       },
-      select: { eventId: true, platformFeeKobo: true, tickets: { where: { id: { in: ticketIds } }, select: { id: true, priceKobo: true } } },
+      select: { eventId: true, reference: true, platformFeeKobo: true, event: { select: { title: true } }, tickets: { where: { id: { in: ticketIds } }, select: { id: true, priceKobo: true } } },
     });
     if (!order) throw new Error('order is unavailable to this organizer');
     await transaction.$queryRaw`SELECT id FROM "order" WHERE id = ${orderId} FOR UPDATE`;
@@ -282,6 +283,8 @@ export async function createRefundRequest({
       select: { id: true, status: true, totalRefundKobo: true },
     });
     await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'REFUND_REQUEST_CREATED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { orderId, ticketIds } } });
+    const organizer = await transaction.applicationProfile.findUniqueOrThrow({ where: { id: organizerProfileId }, select: { user: { select: { name: true, email: true } } } });
+    await transaction.notificationJob.create({ data: { type: 'REFUND_REQUEST_RECEIVED', recipientEmail: organizer.user.email, idempotencyKey: `refund:${refund.id}:requested`, content: encodeEmailPayload({ name: organizer.user.name, eventTitle: order.event.title, orderReference: order.reference, requestedAmountKobo: totalRefundKobo, reason: reason.trim() }) } });
     return { id: refund.id, status: 'REQUESTED', totalRefundKobo: refund.totalRefundKobo };
   });
 }
@@ -300,7 +303,7 @@ export async function createPayoutRequest({
   return database.$transaction(async (transaction) => {
     const event = await transaction.event.findFirst({
       where: { id: eventId, organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
-      select: { endAt: true },
+      select: { endAt: true, title: true, organizer: { select: { user: { select: { name: true, email: true } } } }, },
     });
     if (!event) throw new Error('event is unavailable to this organizer');
     if (event.endAt > now) throw new Error('payout is unavailable before the event ends');
@@ -336,6 +339,7 @@ export async function createPayoutRequest({
       select: { id: true, requestedAmountKobo: true, calculatedPayableKobo: true },
     });
     await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'PAYOUT_REQUEST_CREATED', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { eventId, requestedAmountKobo: payout.requestedAmountKobo } } });
+    await transaction.notificationJob.create({ data: { type: 'PAYOUT_REQUEST_RECEIVED', recipientEmail: event.organizer.user.email, idempotencyKey: `payout:${payout.id}:requested`, content: encodeEmailPayload({ name: event.organizer.user.name, eventTitle: event.title, requestedAmountKobo: payout.requestedAmountKobo, calculatedPayableKobo: payout.calculatedPayableKobo, requestedAt: now.toISOString() }) } });
     return { id: payout.id, status: 'REQUESTED', requestedAmountKobo: payout.requestedAmountKobo, calculatedPayableKobo: payout.calculatedPayableKobo };
   });
 }

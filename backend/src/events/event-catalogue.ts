@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 export async function createOwnedEvent({
   database,
@@ -58,10 +59,16 @@ export async function publishOwnedEvent({
       endAt: { gt: now },
       startAt: { gt: now },
     },
-    select: { id: true },
+    select: { id: true, title: true, slug: true, startAt: true, venue: true, organizer: { select: { user: { select: { email: true } } } } },
   });
   if (!event) throw new Error('event is unavailable to this organizer');
   await database.event.update({ where: { id: event.id }, data: { status: 'PUBLISHED', publishedAt: now } });
+  await database.notificationJob.create({
+    data: {
+      type: 'EVENT_PUBLISHED', recipientEmail: event.organizer.user.email, idempotencyKey: `event:${event.id}:published`,
+      content: encodeEmailPayload({ eventTitle: event.title, eventSlug: event.slug, startAt: event.startAt.toISOString(), venue: event.venue }),
+    },
+  });
   await recordOrganizerAudit(database, organizerProfileId, 'EVENT_PUBLISHED', 'EVENT', event.id);
 }
 

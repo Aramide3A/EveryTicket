@@ -48,6 +48,17 @@ export function createR2ObjectStore({ config, client, signUrl }: { config: R2Con
       else await r2Client!.send(command);
     },
 
+    async getPrivatePdf({ objectKey }: { objectKey: string }): Promise<Uint8Array> {
+      if (!objectKey.startsWith('tickets/') || !objectKey.endsWith('.pdf')) throw new RangeError('private ticket object key is invalid');
+      const command = new GetObjectCommand({ Bucket: config.bucket, Key: objectKey });
+      const result = client
+        ? await client.send(command as unknown as { input: Record<string, unknown> })
+        : await r2Client!.send(command);
+      const body = result && typeof result === 'object' ? (result as { Body?: { transformToByteArray?: () => Promise<Uint8Array> } }).Body : undefined;
+      if (!body?.transformToByteArray) throw new Error('private ticket PDF is unavailable');
+      return body.transformToByteArray();
+    },
+
     createPrivateDownloadUrl({ objectKey }: { objectKey: string }): Promise<string> {
       if (!objectKey.startsWith('tickets/') || !objectKey.endsWith('.pdf')) throw new RangeError('private ticket object key is invalid');
       return sign(signingClient, new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }), { expiresIn: 300 });

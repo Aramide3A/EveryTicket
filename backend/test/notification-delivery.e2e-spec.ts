@@ -3,11 +3,11 @@ import { createDatabaseClient } from '../src/persistence/prisma-client.js';
 type NotificationDelivery = {
   deliverPendingNotifications(input: {
     database: ReturnType<typeof createDatabaseClient>;
-    sender: { send(input: { to: string; subject: string; text: string }): Promise<void> };
+    sender: { send(input: { to: string; subject: string; text: string; html?: string }): Promise<void> };
     now: Date;
     maxAttempts: number;
-  }): Promise<{ sent: number; retried: number; failed: number }>;
-  notificationMessage(input: { type: 'ORDER_CONFIRMATION' | 'RSVP_CONFIRMATION' | 'REFUND_DECISION' | 'PAYOUT_DECISION'; to: string; content?: string | null }): { to: string; subject: string; text: string };
+  }): Promise<{ sent: number; retried: number; failed: number; deferred: number }>;
+  notificationMessage(input: { type: string; to: string; content?: string | null }): { to: string; subject: string; text: string; html?: string };
 };
 
 async function loadNotificationDelivery(): Promise<NotificationDelivery | undefined> {
@@ -22,16 +22,15 @@ describe('notification delivery outbox', () => {
   let client: ReturnType<typeof createDatabaseClient> | undefined;
   let jobIds: string[] = [];
 
-  it('uses stored signed RSVP delivery content when present', async () => {
+  it('renders stored RSVP details through the branded template', async () => {
     const delivery = await loadNotificationDelivery();
     expect(delivery).toBeDefined();
     if (!delivery) throw new Error('notification delivery is unavailable');
-    const content = 'Your RSVP is confirmed. Admission credential: eg1.guest_123.signature';
+    const content = JSON.stringify({ name: 'Amina', eventTitle: 'Afrobeats at Sunset', credential: 'eg1.guest_123.signature' });
 
-    expect(delivery.notificationMessage({ type: 'RSVP_CONFIRMATION', to: 'guest@example.test', content })).toEqual({
-      to: 'guest@example.test',
-      subject: 'Your EverythingTicket RSVP',
-      text: content,
+    expect(delivery.notificationMessage({ type: 'RSVP_CONFIRMATION', to: 'guest@example.test', content })).toMatchObject({
+      to: 'guest@example.test', subject: 'Your RSVP is confirmed',
+      text: expect.stringContaining('eg1.guest_123.signature'), html: expect.stringContaining('Afrobeats at Sunset'),
     });
   });
 
@@ -63,7 +62,7 @@ describe('notification delivery outbox', () => {
       sender: { send: async (message) => { sent.push(message); } },
       now: new Date('2032-01-01T10:00:00.000Z'),
       maxAttempts: 3,
-    })).resolves.toEqual({ sent: 1, retried: 0, failed: 0 });
+    })).resolves.toEqual({ sent: 1, retried: 0, failed: 0, deferred: 0 });
 
     expect(sent).toEqual([{ to: 'buyer@example.test', subject: 'Your EverythingTicket order', text: 'Your ticket order is confirmed.' }]);
     await expect(client.notificationJob.findUnique({ where: { id: job.id }, select: { status: true, attempts: true, sentAt: true, failureDetail: true } })).resolves.toEqual({ status: 'SENT', attempts: 1, sentAt: new Date('2032-01-01T10:00:00.000Z'), failureDetail: null });
@@ -83,10 +82,10 @@ describe('notification delivery outbox', () => {
     jobIds.push(job.id);
     const unavailable = { send: async (): Promise<void> => { throw new Error('SMTP unavailable'); } };
 
-    await expect(delivery.deliverPendingNotifications({ database: client, sender: unavailable, now: new Date('2032-01-01T10:00:00.000Z'), maxAttempts: 2 })).resolves.toEqual({ sent: 0, retried: 1, failed: 0 });
+    await expect(delivery.deliverPendingNotifications({ database: client, sender: unavailable, now: new Date('2032-01-01T10:00:00.000Z'), maxAttempts: 2 })).resolves.toEqual({ sent: 0, retried: 1, failed: 0, deferred: 0 });
     await expect(client.notificationJob.findUnique({ where: { id: job.id }, select: { status: true, attempts: true, failureDetail: true } })).resolves.toEqual({ status: 'PENDING', attempts: 1, failureDetail: 'SMTP unavailable' });
 
-    await expect(delivery.deliverPendingNotifications({ database: client, sender: unavailable, now: new Date('2032-01-01T10:01:00.000Z'), maxAttempts: 2 })).resolves.toEqual({ sent: 0, retried: 0, failed: 1 });
+    await expect(delivery.deliverPendingNotifications({ database: client, sender: unavailable, now: new Date('2032-01-01T10:01:00.000Z'), maxAttempts: 2 })).resolves.toEqual({ sent: 0, retried: 0, failed: 1, deferred: 0 });
     await expect(client.notificationJob.findUnique({ where: { id: job.id }, select: { status: true, attempts: true, failureDetail: true } })).resolves.toEqual({ status: 'FAILED', attempts: 2, failureDetail: 'SMTP unavailable' });
   });
 

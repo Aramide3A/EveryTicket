@@ -32,7 +32,7 @@ export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ clo
     name: job.name,
     handlers: {
       reconcilePayments: async () => withDatabase((database) => reconcilePendingPayments({ database, gateway, now: new Date() }).then(() => undefined)),
-      deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
+      deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, ticketStore: objectStore, publicAppUrl: config.publicAppUrl, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
       generateTicketDocuments: async () => withDatabase((database) => processPendingTicketDocuments({ database, objectStore, ticketCredentialSecret: config.admissionTokenSecret, now: new Date() }).then(() => undefined)),
       removeExpiredMedia: async () => withDatabase((database) => removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }).then(() => undefined)),
     },
