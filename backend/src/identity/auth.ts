@@ -3,6 +3,7 @@ import { prismaAdapter } from 'better-auth/adapters/prisma';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { createDatabaseClient } from '../persistence/prisma-client.js';
 import { createResendEmailSender } from '../worker/resend-email-sender.js';
+import { renderAuthEmail, renderNotificationEmail } from '../worker/email-templates.js';
 import { withFrontendVerificationCallback } from './email-verification-url.js';
 import { linkGuestOrdersForVerifiedUser } from './guest-order-link.js';
 import { trustedOrigins } from './trusted-origins.js';
@@ -14,8 +15,8 @@ type AuthOptions = {
   secret: string;
   trustedOrigins?: string[];
   requireEmailVerification?: boolean;
-  sendVerificationEmail?: (input: { user: { email: string }; url: string }) => Promise<void>;
-  sendResetPassword?: (input: { user: { email: string }; url: string; token: string }) => Promise<void>;
+  sendVerificationEmail?: (input: { user: { email: string; name: string }; url: string }) => Promise<void>;
+  sendResetPassword?: (input: { user: { email: string; name: string }; url: string; token: string }) => Promise<void>;
 };
 
 export function createAuth({
@@ -50,6 +51,14 @@ export function createAuth({
       sendVerificationEmail,
       afterEmailVerification: async (user) => {
         await linkGuestOrdersForVerifiedUser({ database, user });
+        const profile = await database.applicationProfile.findUnique({ where: { userId: user.id }, select: { roles: true } });
+        if (verificationEmailSender) {
+          const email = renderNotificationEmail({
+            type: 'WELCOME', publicAppUrl,
+            content: JSON.stringify({ name: user.name, role: profile?.roles.includes('ORGANIZER') ? 'ORGANIZER' : 'CUSTOMER' }),
+          });
+          await verificationEmailSender.send({ to: user.email, ...email });
+        }
       },
     },
     user: { modelName: 'auth_user' },
@@ -111,16 +120,14 @@ export const auth = createAuth({
   secret,
   baseUrl: process.env.BETTER_AUTH_URL ?? 'http://localhost:3000',
   requireEmailVerification: emailVerificationEnabled,
-  sendVerificationEmail: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
-    to: user.email,
-    subject: 'Verify your EverythingTicket email',
-    text: `Verify your email address to access your EverythingTicket account: ${withFrontendVerificationCallback(url, publicAppUrl)}`,
-  }) : undefined,
-  sendResetPassword: verificationEmailSender ? ({ user, url }) => verificationEmailSender.send({
-    to: user.email,
-    subject: 'Reset your EverythingTicket password',
-    text: `Reset your EverythingTicket password using this secure link: ${url}`,
-  }) : undefined,
+  sendVerificationEmail: verificationEmailSender ? ({ user, url }) => {
+    const email = renderAuthEmail({ kind: 'VERIFY', name: user.name, url: withFrontendVerificationCallback(url, publicAppUrl) });
+    return verificationEmailSender.send({ to: user.email, ...email });
+  } : undefined,
+  sendResetPassword: verificationEmailSender ? ({ user, url }) => {
+    const email = renderAuthEmail({ kind: 'RESET', name: user.name, url });
+    return verificationEmailSender.send({ to: user.email, ...email });
+  } : undefined,
   trustedOrigins: trustedOrigins(),
 });
 

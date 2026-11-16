@@ -1,5 +1,6 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 export async function cancelOwnedEvent({
   database,
@@ -19,7 +20,11 @@ export async function cancelOwnedEvent({
   await database.$transaction(async (transaction) => {
     const event = await transaction.event.findFirst({
       where: { id: eventId, organizerProfileId, status: 'PUBLISHED', organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
-      select: { id: true },
+      select: {
+        id: true, title: true, startAt: true,
+        orders: { where: { status: 'PAID' }, select: { buyerEmail: true, reference: true } },
+        guestLists: { select: { guests: { where: { responseStatus: 'ACCEPTED' }, select: { email: true } } } },
+      },
     });
     if (!event) throw new Error('event is unavailable to this organizer');
     await transaction.inventoryHold.deleteMany({ where: { order: { eventId, status: 'PENDING_PAYMENT' } } });
@@ -27,6 +32,17 @@ export async function cancelOwnedEvent({
     await transaction.ticket.updateMany({ where: { eventId, status: 'ACTIVE' }, data: { status: 'REVOKED' } });
     await transaction.guest.updateMany({ where: { guestList: { eventId }, credentialStatus: 'ACTIVE' }, data: { credentialStatus: 'REVOKED' } });
     await transaction.event.update({ where: { id: event.id }, data: { status: 'CANCELLED', cancelledAt: now, cancelledReason } });
+    const recipients = new Map<string, string | undefined>();
+    for (const order of event.orders) recipients.set(order.buyerEmail, order.reference);
+    for (const list of event.guestLists) for (const guest of list.guests) recipients.set(guest.email, undefined);
+    await transaction.notificationJob.createMany({
+      data: [...recipients.entries()].map(([recipientEmail, orderReference]) => ({
+        type: 'EVENT_CANCELLED' as const, recipientEmail,
+        idempotencyKey: `event:${event.id}:cancelled:${recipientEmail}`,
+        content: encodeEmailPayload({ eventTitle: event.title, startAt: event.startAt.toISOString(), orderReference, refundGuidance: 'We will share refund guidance shortly.' }),
+      })),
+      skipDuplicates: true,
+    });
     await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'EVENT_CANCELLED', targetType: 'EVENT', targetId: event.id, details: { reason: cancelledReason } } });
   }, { isolationLevel: 'Serializable' });
 }

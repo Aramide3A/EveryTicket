@@ -1,6 +1,7 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { profileHasRole, profileRoleFilter } from '../identity/current-profile.js';
 import type { PaystackRefund, RefundGateway } from '../payments/paystack-gateway.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 export async function replacePlatformFeeRule({
   database,
@@ -78,10 +79,11 @@ export async function blockProfile({
   if (!reason.trim() || profileId === adminProfileId) throw new RangeError('a different profile and block reason are required');
   await database.$transaction(async (transaction) => {
     const admin = await transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } });
-    const target = await transaction.applicationProfile.findFirst({ where: { id: profileId, status: 'ACTIVE' }, select: { id: true, userId: true, role: true, roles: true } });
+    const target = await transaction.applicationProfile.findFirst({ where: { id: profileId, status: 'ACTIVE' }, select: { id: true, userId: true, role: true, roles: true, user: { select: { name: true, email: true } } } });
     if (!admin || !target || profileHasRole(target, 'ADMIN')) throw new Error('account is unavailable for this administrator');
     await transaction.applicationProfile.update({ where: { id: target.id }, data: { status: 'BLOCKED', blockedAt: now, blockedByProfileId: admin.id, blockReason: reason.trim() } });
     await transaction.auth_session.deleteMany({ where: { userId: target.userId } });
+    await transaction.notificationJob.create({ data: { type: 'ACCOUNT_RESTRICTED', recipientEmail: target.user.email, idempotencyKey: `profile:${target.id}:restricted:${now.toISOString()}`, content: encodeEmailPayload({ name: target.user.name, email: target.user.email, reason: reason.trim() }) } });
     await transaction.auditLog.create({
       data: { actorProfileId: admin.id, action: 'ACCOUNT_BLOCKED', targetType: 'APPLICATION_PROFILE', targetId: target.id, details: { reason: reason.trim() } },
     });
@@ -92,6 +94,7 @@ export async function unblockProfile({
   database,
   adminProfileId,
   profileId,
+  now,
 }: {
   database: PrismaClient;
   adminProfileId: string;
@@ -101,9 +104,10 @@ export async function unblockProfile({
   if (profileId === adminProfileId) throw new RangeError('a different profile is required');
   await database.$transaction(async (transaction) => {
     const admin = await transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } });
-    const target = await transaction.applicationProfile.findFirst({ where: { id: profileId, status: 'BLOCKED' }, select: { id: true, role: true, roles: true } });
+    const target = await transaction.applicationProfile.findFirst({ where: { id: profileId, status: 'BLOCKED' }, select: { id: true, role: true, roles: true, user: { select: { name: true, email: true } } } });
     if (!admin || !target || profileHasRole(target, 'ADMIN')) throw new Error('account is unavailable for this administrator');
     await transaction.applicationProfile.update({ where: { id: target.id }, data: { status: 'ACTIVE', blockedAt: null, blockedByProfileId: null, blockReason: null } });
+    await transaction.notificationJob.create({ data: { type: 'ACCOUNT_RESTORED', recipientEmail: target.user.email, idempotencyKey: `profile:${target.id}:restored:${now.toISOString()}`, content: encodeEmailPayload({ name: target.user.name, email: target.user.email }) } });
     await transaction.auditLog.create({
       data: { actorProfileId: admin.id, action: 'ACCOUNT_UNBLOCKED', targetType: 'APPLICATION_PROFILE', targetId: target.id },
     });
@@ -202,7 +206,7 @@ export async function approveRefundRequest({
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
       transaction.refundRequest.findFirst({
         where: { id: refundRequestId, status: 'REQUESTED' },
-        select: { id: true, organizer: { select: { user: { select: { email: true } } } }, order: { select: { platformFeeKobo: true } }, tickets: { select: { ticket: { select: { priceKobo: true } } } } },
+        select: { id: true, organizer: { select: { user: { select: { email: true } } } }, event: { select: { title: true } }, order: { select: { platformFeeKobo: true, reference: true } }, tickets: { select: { ticket: { select: { priceKobo: true } } } } },
       }),
     ]);
     if (!admin || !refund) throw new Error('refund is unavailable for this administrator');
@@ -217,7 +221,7 @@ export async function approveRefundRequest({
       data: { actorProfileId: admin.id, action: 'REFUND_APPROVED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { ticketRefundKobo, platformFeeRefundKobo, reason: reason.trim() } },
     });
     await transaction.notificationJob.create({
-      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:approved` },
+      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:approved`, content: encodeEmailPayload({ status: 'APPROVED', eventTitle: refund.event.title, orderReference: refund.order.reference, approvedAmountKobo: totalRefundKobo, reviewReason: reason.trim() }) },
     });
   });
 }
@@ -241,7 +245,7 @@ export async function markRefundProcessed({
   await database.$transaction(async (transaction) => {
     const [admin, refund] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: { in: ['APPROVED', 'PROCESSING'] } }, select: { id: true, organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } } }),
+      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: { in: ['APPROVED', 'PROCESSING'] } }, select: { id: true, totalRefundKobo: true, organizer: { select: { user: { select: { email: true } } } }, event: { select: { title: true } }, order: { select: { reference: true } }, tickets: { select: { ticketId: true } } } }),
     ]);
     if (!admin || !refund) throw new Error('refund is unavailable for this administrator');
     await transaction.refundRequest.update({
@@ -253,7 +257,7 @@ export async function markRefundProcessed({
       data: { actorProfileId: admin.id, action: 'REFUND_PROCESSED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { gatewayRefundReference: gatewayRefundReference.trim(), gatewayStatus: gatewayStatus.trim() } },
     });
     await transaction.notificationJob.create({
-      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:processed` },
+      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:processed`, content: encodeEmailPayload({ status: 'PROCESSED', eventTitle: refund.event.title, orderReference: refund.order.reference, refundedAmountKobo: refund.totalRefundKobo, gatewayReference: gatewayRefundReference.trim() }) },
     });
   });
 }
@@ -383,7 +387,7 @@ async function applyRefundProviderResult({
   await database.$transaction(async (transaction) => {
     const refund = await transaction.refundRequest.findUniqueOrThrow({
       where: { id: refundRequestId },
-      select: { organizer: { select: { user: { select: { email: true } } } }, tickets: { select: { ticketId: true } } },
+      select: { totalRefundKobo: true, organizer: { select: { user: { select: { email: true } } } }, event: { select: { title: true } }, order: { select: { reference: true } }, tickets: { select: { ticketId: true } } },
     });
     const status = result.status === 'processed' ? 'PROCESSED' : result.status === 'failed' ? 'FAILED' : 'PROCESSING';
     await transaction.refundRequest.update({
@@ -398,7 +402,7 @@ async function applyRefundProviderResult({
     });
     if (status === 'PROCESSED' || status === 'FAILED') {
       await transaction.notificationJob.create({
-        data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refundRequestId}:${status.toLowerCase()}` },
+        data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refundRequestId}:${status.toLowerCase()}`, content: encodeEmailPayload({ status, eventTitle: refund.event.title, orderReference: refund.order.reference, refundedAmountKobo: refund.totalRefundKobo, gatewayReference: result.reference, reviewReason: result.status === 'failed' ? 'The payment provider could not complete this refund.' : undefined }) },
       });
     }
   });
@@ -421,13 +425,13 @@ export async function rejectRefundRequest({
   await database.$transaction(async (transaction) => {
     const [admin, refund] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: 'REQUESTED' }, select: { id: true, organizer: { select: { user: { select: { email: true } } } } } }),
+      transaction.refundRequest.findFirst({ where: { id: refundRequestId, status: 'REQUESTED' }, select: { id: true, totalRefundKobo: true, organizer: { select: { user: { select: { email: true } } } }, event: { select: { title: true } }, order: { select: { reference: true } } } }),
     ]);
     if (!admin || !refund) throw new Error('refund is unavailable for this administrator');
     await transaction.refundRequest.update({ where: { id: refund.id }, data: { status: 'REJECTED', reviewedByProfileId: admin.id, reviewedAt: now, reviewReason: reason.trim() } });
     await transaction.auditLog.create({ data: { actorProfileId: admin.id, action: 'REFUND_REJECTED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { reason: reason.trim() } } });
     await transaction.notificationJob.create({
-      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:rejected` },
+      data: { type: 'REFUND_DECISION', recipientEmail: refund.organizer.user.email, idempotencyKey: `refund:${refund.id}:rejected`, content: encodeEmailPayload({ status: 'REJECTED', eventTitle: refund.event.title, orderReference: refund.order.reference, requestedAmountKobo: refund.totalRefundKobo, reviewReason: reason.trim() }) },
     });
   });
 }
@@ -449,13 +453,13 @@ export async function approvePayoutRequest({
   await database.$transaction(async (transaction) => {
     const [admin, payout] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'REQUESTED' }, select: { id: true, organizer: { select: { user: { select: { email: true } } } } } }),
+      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'REQUESTED' }, select: { id: true, requestedAmountKobo: true, event: { select: { title: true } }, organizer: { select: { user: { select: { email: true } } } } } }),
     ]);
     if (!admin || !payout) throw new Error('payout is unavailable for this administrator');
     await transaction.payoutRequest.update({ where: { id: payout.id }, data: { status: 'APPROVED', reviewedByProfileId: admin.id, reviewedAt: now, reviewReason: reason.trim() } });
     await transaction.auditLog.create({ data: { actorProfileId: admin.id, action: 'PAYOUT_APPROVED', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { reason: reason.trim() } } });
     await transaction.notificationJob.create({
-      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:approved` },
+      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:approved`, content: encodeEmailPayload({ status: 'APPROVED', eventTitle: payout.event.title, approvedAmountKobo: payout.requestedAmountKobo, reviewReason: reason.trim() }) },
     });
   });
 }
@@ -479,13 +483,13 @@ export async function markPayoutPaid({
   await database.$transaction(async (transaction) => {
     const [admin, payout] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'APPROVED' }, select: { id: true, organizer: { select: { user: { select: { email: true } } } } } }),
+      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'APPROVED' }, select: { id: true, requestedAmountKobo: true, event: { select: { title: true } }, organizer: { select: { user: { select: { email: true } } } } } }),
     ]);
     if (!admin || !payout) throw new Error('payout is unavailable for this administrator');
     await transaction.payoutRequest.update({ where: { id: payout.id }, data: { status: 'PAID', transferReference: transferReference.trim(), transferDate, paidAt: now } });
     await transaction.auditLog.create({ data: { actorProfileId: admin.id, action: 'PAYOUT_PAID', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { transferReference: transferReference.trim(), transferDate } } });
     await transaction.notificationJob.create({
-      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:paid` },
+      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:paid`, content: encodeEmailPayload({ status: 'PAID', eventTitle: payout.event.title, amountKobo: payout.requestedAmountKobo, transferReference: transferReference.trim() }) },
     });
   });
 }
@@ -507,13 +511,13 @@ export async function rejectPayoutRequest({
   await database.$transaction(async (transaction) => {
     const [admin, payout] = await Promise.all([
       transaction.applicationProfile.findFirst({ where: { id: adminProfileId, status: 'ACTIVE', ...profileRoleFilter('ADMIN') }, select: { id: true } }),
-      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'REQUESTED' }, select: { id: true, organizer: { select: { user: { select: { email: true } } } } } }),
+      transaction.payoutRequest.findFirst({ where: { id: payoutRequestId, status: 'REQUESTED' }, select: { id: true, requestedAmountKobo: true, event: { select: { title: true } }, organizer: { select: { user: { select: { email: true } } } } } }),
     ]);
     if (!admin || !payout) throw new Error('payout is unavailable for this administrator');
     await transaction.payoutRequest.update({ where: { id: payout.id }, data: { status: 'REJECTED', reviewedByProfileId: admin.id, reviewedAt: now, reviewReason: reason.trim() } });
     await transaction.auditLog.create({ data: { actorProfileId: admin.id, action: 'PAYOUT_REJECTED', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { reason: reason.trim() } } });
     await transaction.notificationJob.create({
-      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:rejected` },
+      data: { type: 'PAYOUT_DECISION', recipientEmail: payout.organizer.user.email, idempotencyKey: `payout:${payout.id}:rejected`, content: encodeEmailPayload({ status: 'REJECTED', eventTitle: payout.event.title, requestedAmountKobo: payout.requestedAmountKobo, reviewReason: reason.trim() }) },
     });
   });
 }

@@ -1,6 +1,7 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { finalizePaidOrder } from './finalize-paid-order.js';
 import type { PaymentGateway } from './paystack-gateway.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 export async function initializePayment({
   database,
@@ -98,9 +99,18 @@ export async function processVerifiedPayment({
     return { orderStatus: 'PENDING_PAYMENT' };
   }
   if (verified.status === 'failed') {
-    await database.paymentAttempt.update({
-      where: { reference: paymentReference },
-      data: { status: 'VERIFIED_FAILED', failureDetail: 'Paystack reported a failed payment', verifiedAt: now },
+    await database.$transaction(async (transaction) => {
+      const attempt = await transaction.paymentAttempt.update({
+        where: { reference: paymentReference },
+        data: { status: 'VERIFIED_FAILED', failureDetail: 'Paystack reported a failed payment', verifiedAt: now },
+        select: { reference: true, order: { select: { buyerName: true, buyerEmail: true, reference: true, totalKobo: true, event: { select: { title: true } } } } },
+      });
+      await transaction.notificationJob.create({
+        data: {
+          type: 'PAYMENT_FAILED', recipientEmail: attempt.order.buyerEmail, idempotencyKey: `payment:${attempt.reference}:failed`,
+          content: encodeEmailPayload({ buyerName: attempt.order.buyerName, eventTitle: attempt.order.event.title, orderReference: attempt.order.reference, totalKobo: attempt.order.totalKobo, status: 'Payment failed' }),
+        },
+      });
     });
     return { orderStatus: 'PENDING_PAYMENT' };
   }
