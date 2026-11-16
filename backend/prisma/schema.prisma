@@ -657,3 +657,28 @@ model AuditLog {
   @@index([actorProfileId, createdAt])
   @@map("audit_log")
 }
+
+
+enum CarouselImageStatus {
+  PENDING
+  READY
+  DELETING
+}
+
+model CarouselImage {
+  id            String              @id @default(cuid())
+  objectKey     String              @unique
+  publicUrl     String
+  altText       String
+  contentType   String
+  contentLength Int
+  status        CarouselImageStatus @default(PENDING)
+  expiresAt     DateTime
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([status, createdAt, id])
+  @@index([status, expiresAt])
+  @@map("carousel_image")
+}

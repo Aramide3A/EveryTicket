@@ -35,6 +35,22 @@ export function createR2ObjectStore({ config, client, signUrl }: { config: R2Con
       return { objectKey, uploadUrl, publicUrl: `${config.publicMediaUrl}/${objectKey}` };
     },
 
+    async createCarouselImageUploadUrl({ contentType, contentLength }: { contentType: string; contentLength: number }): Promise<{ objectKey: string; uploadUrl: string; publicUrl: string }> {
+      const extension = imageExtensions[contentType];
+      if (!extension) throw new RangeError('image type is not supported');
+      if (!Number.isSafeInteger(contentLength) || contentLength < 1 || contentLength > maxImageBytes) throw new RangeError('image size is invalid');
+      const objectKey = `carousel/${randomUUID()}.${extension}`;
+      const command = new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: objectKey,
+        ContentType: contentType,
+        ContentLength: contentLength,
+        CacheControl: 'public, max-age=31536000, immutable',
+      });
+      const uploadUrl = await sign(signingClient, command, { expiresIn: 300 });
+      return { objectKey, uploadUrl, publicUrl: `${config.publicMediaUrl}/${objectKey}` };
+    },
+
     async putPrivatePdf({ objectKey, pdf }: { objectKey: string; pdf: Uint8Array }): Promise<void> {
       if (!objectKey.startsWith('tickets/') || !objectKey.endsWith('.pdf')) throw new RangeError('private ticket object key is invalid');
       const command = new PutObjectCommand({
@@ -84,6 +100,26 @@ export function createR2ObjectStore({ config, client, signUrl }: { config: R2Con
       if (client) await client.send(command as unknown as { input: Record<string, unknown> });
       else await r2Client!.send(command);
     },
+    async verifyCarouselImage({ objectKey, contentType, contentLength }: { objectKey: string; contentType: string; contentLength: number }): Promise<boolean> {
+      const extension = imageExtensions[contentType];
+      if (!extension || !isCarouselKey(objectKey) || !objectKey.endsWith(`.${extension}`) || !isValidImageSize(contentLength)) return false;
+      try {
+        const command = new HeadObjectCommand({ Bucket: config.bucket, Key: objectKey });
+        const result = client
+          ? await client.send(command as unknown as { input: Record<string, unknown> })
+          : await r2Client!.send(command);
+        return hasExpectedImageMetadata(result, contentType, contentLength);
+      } catch {
+        return false;
+      }
+    },
+
+    async deleteCarouselObject({ objectKey }: { objectKey: string }): Promise<void> {
+      if (!isCarouselKey(objectKey)) throw new RangeError('public media object key is invalid');
+      const command = new DeleteObjectCommand({ Bucket: config.bucket, Key: objectKey });
+      if (client) await client.send(command as unknown as { input: Record<string, unknown> });
+      else await r2Client!.send(command);
+    },
   };
 }
 
@@ -99,4 +135,8 @@ function hasExpectedImageMetadata(result: unknown, contentType: string, contentL
   if (!result || typeof result !== 'object') return false;
   const metadata = result as { ContentType?: unknown; ContentLength?: unknown };
   return metadata.ContentType === contentType && metadata.ContentLength === contentLength;
+}
+
+function isCarouselKey(objectKey: string): boolean {
+  return /^carousel\/[^/]+\.(?:jpg|png|webp)$/.test(objectKey);
 }
