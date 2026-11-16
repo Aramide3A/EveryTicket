@@ -1,3 +1,4 @@
+import { cleanupCarouselImages } from './media/carousel-operations.js';
 import { Queue, Worker } from 'bullmq';
 import { createDatabaseClient } from './persistence/prisma-client.js';
 import { reconcilePendingPayments } from './payments/payment-lifecycle.js';
@@ -34,7 +35,14 @@ export async function startWorker(environment: NodeJS.ProcessEnv): Promise<{ clo
       reconcilePayments: async () => withDatabase((database) => reconcilePendingPayments({ database, gateway, now: new Date() }).then(() => undefined)),
       deliverNotifications: async () => withDatabase((database) => deliverPendingNotifications({ database, sender, now: new Date(), maxAttempts: config.notificationMaxAttempts }).then(() => undefined)),
       generateTicketDocuments: async () => withDatabase((database) => processPendingTicketDocuments({ database, objectStore, ticketCredentialSecret: config.admissionTokenSecret, now: new Date() }).then(() => undefined)),
-      removeExpiredMedia: async () => withDatabase((database) => removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }).then(() => undefined)),
+      removeExpiredMedia: async () => withDatabase(async (database) => {
+        const results = await Promise.allSettled([
+          removeExpiredMediaUploads({ database, deleteObject: (objectKey) => objectStore.deletePublicObject({ objectKey }), now: new Date() }),
+          cleanupCarouselImages({ database, deleteObject: (objectKey) => objectStore.deleteCarouselObject({ objectKey }), now: new Date() }),
+        ]);
+        const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+        if (failures.length) throw new AggregateError(failures, 'media cleanup failed');
+      }),
     },
   }), { connection });
 
