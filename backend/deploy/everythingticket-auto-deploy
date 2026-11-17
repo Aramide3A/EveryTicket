@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Pull, build, migrate, and atomically activate the latest approved main branch.
+set -Eeuo pipefail
+
+readonly APP_ROOT="/opt/everythingticket"
+readonly REPOSITORY="https://github.com/Aramide3A/EveryTicket.git"
+readonly BRANCH="main"
+readonly SOURCE_DIR="${APP_ROOT}/auto-deploy-source"
+readonly RELEASES_DIR="${APP_ROOT}/releases"
+readonly CURRENT_LINK="${APP_ROOT}/current"
+readonly LOCK_FILE="/var/lock/everythingticket-auto-deploy.lock"
+readonly HEALTH_URL="http://127.0.0.1:3000/health"
+
+exec 9>"${LOCK_FILE}"
+flock -n 9 || exit 0
+
+log() {
+  printf '[%s] %s\n' "$(date --iso-8601=seconds)" "$*"
+}
+
+activate_previous_release() {
+  if [[ -n "${previous_release:-}" && -d "${previous_release}" ]]; then
+    log "Health check failed; restoring ${previous_release}"
+    ln -sfn "${previous_release}" "${APP_ROOT}/.current-next"
+    mv -Tf "${APP_ROOT}/.current-next" "${CURRENT_LINK}"
+    systemctl restart everythingticket-api.service
+  fi
+}
+
+trap 'activate_previous_release' ERR
+
+mkdir -p "${RELEASES_DIR}"
+
+if [[ ! -d "${SOURCE_DIR}/.git" ]]; then
+  git clone --depth 1 --branch "${BRANCH}" "${REPOSITORY}" "${SOURCE_DIR}"
+else
+  git -C "${SOURCE_DIR}" fetch --depth 1 origin "${BRANCH}"
+  git -C "${SOURCE_DIR}" checkout --force --detach FETCH_HEAD
+  git -C "${SOURCE_DIR}" clean -ffd
+fi
+
+revision="$(git -C "${SOURCE_DIR}" rev-parse HEAD)"
+release_dir="${RELEASES_DIR}/${revision}"
+
+if [[ -L "${CURRENT_LINK}" && "$(readlink -f "${CURRENT_LINK}")" == "${release_dir}" ]]; then
+  log "${revision} is already active"
+  exit 0
+fi
+
+previous_release=""
+if [[ -L "${CURRENT_LINK}" ]]; then
+  previous_release="$(readlink -f "${CURRENT_LINK}")"
+fi
+
+if [[ ! -d "${release_dir}" ]]; then
+  staging_dir="$(mktemp -d "${RELEASES_DIR}/.staging.XXXXXX")"
+  trap 'rm -rf "${staging_dir:-}"; activate_previous_release' ERR
+  git -C "${SOURCE_DIR}" archive "${revision}" | tar -x -C "${staging_dir}"
+
+  (
+    cd "${staging_dir}/backend"
+    # The deployment unit reads NODE_ENV=production from the API environment.
+    # Building still needs TypeScript and its declaration packages.
+    npm ci --include=dev
+    npm run build
+  )
+
+  printf '%s\n' "${revision}" > "${staging_dir}/.git-revision"
+  chown -R everythingticket:everythingticket "${staging_dir}"
+  mv "${staging_dir}" "${release_dir}"
+  unset staging_dir
+fi
+
+(
+  cd "${release_dir}/backend"
+  npx prisma migrate deploy
+)
+
+ln -sfn "${release_dir}" "${APP_ROOT}/.current-next"
+mv -Tf "${APP_ROOT}/.current-next" "${CURRENT_LINK}"
+systemctl restart everythingticket-api.service
+
+for _ in {1..24}; do
+  if curl --fail --silent --show-error "${HEALTH_URL}" >/dev/null; then
+    log "Activated ${revision}"
+    exit 0
+  fi
+  sleep 5
+done
+
+log "Health check did not succeed after activating ${revision}"
+exit 1

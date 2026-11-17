@@ -1,0 +1,9 @@
+[Unit]
+Description=Deploy the latest approved EverythingTicket backend release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/everythingticket/api.env
+ExecStart=/usr/local/sbin/everythingticket-auto-deploy
