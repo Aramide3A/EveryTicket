@@ -51,6 +51,16 @@ export function profileHasRole(
   return profile.role === requiredRole || profile.roles.includes(requiredRole);
 }
 
+export async function signInAdministrator<T>(
+  profile: { role: ApplicationRole; roles: ApplicationRole[] } | null,
+  createSession: () => Promise<T>,
+): Promise<T> {
+  if (!profile || !profileHasRole(profile, 'ADMIN')) {
+    throw new UnauthorizedException('administrator access is required');
+  }
+  return createSession();
+}
+
 export function profileRoleFilter(requiredRole: ApplicationRole) {
   return {
     OR: [

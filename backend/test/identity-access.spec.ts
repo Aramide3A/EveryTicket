@@ -30,6 +30,21 @@ describe('profile role access', () => {
       ],
     });
   });
+
+  it('rejects a customer before an administrator session can be created', async () => {
+    const module = await import('../src/identity/current-profile.js');
+    let sessionCreated = false;
+
+    await expect(module.signInAdministrator(
+      { role: 'CUSTOMER', roles: ['CUSTOMER'] },
+      async () => {
+        sessionCreated = true;
+        return { token: 'session-token' };
+      },
+    )).rejects.toThrow('administrator access is required');
+
+    expect(sessionCreated).toBe(false);
+  });
 });
 
 describe('organizer registration identity helpers', () => {
