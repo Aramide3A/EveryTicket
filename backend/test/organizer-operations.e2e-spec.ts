@@ -16,6 +16,8 @@ type OrganizerOperations = {
 	}): Promise<{
 		items: Array<{
 			id: string;
+			title: string;
+			status: string;
 			confirmedTicketsSold: number;
 			ticketSubtotalKobo: number;
 		}>;
@@ -40,7 +42,7 @@ type OrganizerOperations = {
     ticketCheckIns: number;
     guestCheckIns: number;
     salesByTicketType: Array<{ ticketTypeId: string; name: string; quantity: number; ticketSubtotalKobo: number }>;
-    salesTrend: Array<{ date: string; ticketSubtotalKobo: number; totalPaidKobo: number }>;
+    salesTrend: Array<{ date: string; ticketQuantity: number; ticketSubtotalKobo: number; totalPaidKobo: number }>;
   }>;
   listOrganizerAttendees(input: {
     database: ReturnType<typeof createDatabaseClient>;
@@ -144,7 +146,7 @@ describe('organizer operations', () => {
       ticketCheckIns: 1,
       guestCheckIns: 1,
       salesByTicketType: [{ ticketTypeId: ids.ticketTypeId, name: 'General', quantity: 1, ticketSubtotalKobo: 2000 }],
-      salesTrend: [{ date: '2031-12-01', ticketSubtotalKobo: 2000, totalPaidKobo: 2200 }],
+      salesTrend: [{ date: '2031-12-01', ticketQuantity: 1, ticketSubtotalKobo: 2000, totalPaidKobo: 2200 }],
     });
     await expect(operations.getOrganizerDashboard({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId, now: new Date('2031-01-01T00:00:00.000Z') })).rejects.toThrow('event is unavailable to this organizer');
     await expect(operations.listOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId })).resolves.toEqual([
@@ -165,30 +167,40 @@ describe('organizer operations', () => {
 		await client.$connect();
 		await createDashboardFixture(client, ids);
 
-		await expect(operations.pageOwnedEvents({
-			database: client,
-			organizerProfileId: ids.organizerProfileId,
-			page: 1,
-			pageSize: 10,
-			skip: 0,
-			status: 'PUBLISHED',
-			query: 'Dashboard',
-			dateField: 'event',
-			dateFrom: new Date('2032-01-01T00:00:00.000Z'),
-			dateTo: new Date('2032-01-31T23:59:59.999Z'),
-		})).resolves.toMatchObject({
+		await expect(
+			operations.pageOwnedEvents({
+				database: client,
+				organizerProfileId: ids.organizerProfileId,
+				page: 1,
+				pageSize: 10,
+				skip: 0,
+				status: 'PUBLISHED',
+				query: 'Dashboard',
+				dateField: 'event',
+				dateFrom: new Date('2032-01-01T00:00:00.000Z'),
+				dateTo: new Date('2032-01-31T23:59:59.999Z'),
+			}),
+		).resolves.toMatchObject({
 			page: 1,
 			pageSize: 10,
 			total: 1,
-			items: [{ id: ids.eventId, confirmedTicketsSold: 1, ticketSubtotalKobo: 2000 }],
+			items: [
+				{
+					id: ids.eventId,
+					confirmedTicketsSold: 1,
+					ticketSubtotalKobo: 2000,
+				},
+			],
 		});
-		await expect(operations.pageOwnedEvents({
-			database: client,
-			organizerProfileId: ids.otherOrganizerProfileId,
-			page: 1,
-			pageSize: 10,
-			skip: 0,
-		})).resolves.toMatchObject({ total: 0, items: [] });
+		await expect(
+			operations.pageOwnedEvents({
+				database: client,
+				organizerProfileId: ids.otherOrganizerProfileId,
+				page: 1,
+				pageSize: 10,
+				skip: 0,
+			}),
+		).resolves.toMatchObject({ total: 0, items: [] });
 	});
 
   it('lists only the owner event attendees and escapes CSV formulas', async () => {

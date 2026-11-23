@@ -29,11 +29,11 @@ export async function getOrganizerDashboard({
   ticketCheckIns: number;
   guestCheckIns: number;
   salesByTicketType: Array<{ ticketTypeId: string; name: string; quantity: number; ticketSubtotalKobo: number }>;
-  salesTrend: Array<{ date: string; ticketSubtotalKobo: number; totalPaidKobo: number }>;
+  salesTrend: Array<{ date: string; ticketQuantity: number; ticketSubtotalKobo: number; totalPaidKobo: number }>;
 }> {
   const event = await requireOwnedEvent(database, organizerProfileId, eventId);
   const [orders, ticketTypes, ticketCheckIns, guestCheckIns, refunds, payouts] = await Promise.all([
-    database.order.findMany({ where: { eventId, status: 'PAID' }, select: { ticketSubtotalKobo: true, platformFeeKobo: true, totalKobo: true, paidAt: true } }),
+    database.order.findMany({ where: { eventId, status: 'PAID' }, select: { ticketSubtotalKobo: true, platformFeeKobo: true, totalKobo: true, paidAt: true, tickets: { select: { id: true } } } }),
     database.ticketType.findMany({
       where: { eventId },
       select: { id: true, name: true, capacity: true, tickets: { where: { order: { status: 'PAID' } }, select: { priceKobo: true } } },
@@ -65,11 +65,12 @@ export async function getOrganizerDashboard({
   const reservedTicketRefundKobo = refunds.reduce((total, refund) => total + refund.ticketRefundKobo, 0);
   const reservedPayoutKobo = payouts.reduce((total, payout) => total + payout.requestedAmountKobo, 0);
   const payableKobo = Math.max(ticketSubtotalKobo - reservedTicketRefundKobo - reservedPayoutKobo, 0);
-  const trend = new Map<string, { ticketSubtotalKobo: number; totalPaidKobo: number }>();
+  const trend = new Map<string, { ticketQuantity: number; ticketSubtotalKobo: number; totalPaidKobo: number }>();
   for (const order of orders) {
     if (!order.paidAt) continue;
     const date = order.paidAt.toISOString().slice(0, 10);
-    const current = trend.get(date) ?? { ticketSubtotalKobo: 0, totalPaidKobo: 0 };
+    const current = trend.get(date) ?? { ticketQuantity: 0, ticketSubtotalKobo: 0, totalPaidKobo: 0 };
+    current.ticketQuantity += order.tickets.length;
     current.ticketSubtotalKobo += order.ticketSubtotalKobo;
     current.totalPaidKobo += order.totalKobo;
     trend.set(date, current);
