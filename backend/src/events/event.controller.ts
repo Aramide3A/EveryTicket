@@ -3,7 +3,8 @@ import type { Request } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { requireActiveProfile } from '../identity/current-profile.js';
 import { createDatabaseOperation } from '../persistence/database-operation.js';
-import { createOwnedEvent, createOwnedTicketType, getPublicEvent, listPublicEvents, publishOwnedEvent, removeOwnedTicketType, unpublishOwnedEvent, updateOwnedEvent, updateOwnedTicketType } from './event-catalogue.js';
+import { readPagination } from '../common/http/pagination.js';
+import { createOwnedEvent, createOwnedTicketType, getPublicEvent, listPublicEvents, pageOwnedEvents, publishOwnedEvent, removeOwnedTicketType, unpublishOwnedEvent, updateOwnedEvent, updateOwnedTicketType } from './event-catalogue.js';
 import { cancelOwnedEvent, removeOwnedEvent } from './event-lifecycle.js';
 
 const runEventDatabaseOperation = createDatabaseOperation('event catalogue is not configured');
@@ -30,6 +31,31 @@ export class EventController {
         id: true, title: true, slug: true, status: true, startAt: true, endAt: true,
         media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } },
       },
+    }));
+  }
+
+  @Get('organizer/events/page')
+  @ApiBearerAuth('session')
+  async pagedOwnedEvents(
+    @Req() request: Request,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('status') status?: string,
+    @Query('q') query?: string,
+    @Query('dateField') dateField?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+  ) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    return runEventDatabaseOperation((database) => pageOwnedEvents({
+      database,
+      organizerProfileId: profile.id,
+      query,
+      status: readOptionalEventStatus(status),
+      dateField: readOptionalDateField(dateField),
+      dateFrom: readOptionalQueryDate(dateFrom, 'dateFrom'),
+      dateTo: readOptionalQueryDate(dateTo, 'dateTo', true),
+      ...readPagination(page, pageSize),
     }));
   }
 
@@ -207,6 +233,25 @@ function readDateValue(value: Record<string, unknown>, name: string): Date {
 
 function optionalDateValue(value: Record<string, unknown>, name: string): Date | undefined {
   return value[name] === undefined ? undefined : readDateValue(value, name);
+}
+
+function readOptionalEventStatus(value: string | undefined): 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'DRAFT' || value === 'PUBLISHED' || value === 'SUSPENDED' || value === 'CANCELLED') return value;
+  throw new BadRequestException('status is invalid');
+}
+
+function readOptionalDateField(value: string | undefined): 'event' | 'created' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'event' || value === 'created') return value;
+  throw new BadRequestException('dateField is invalid');
+}
+
+function readOptionalQueryDate(value: string | undefined, name: string, endOfDay = false): Date | undefined {
+  if (value === undefined || value === '') return undefined;
+  const date = new Date(`${value}${endOfDay ? 'T23:59:59.999Z' : 'T00:00:00.000Z'}`);
+  if (Number.isNaN(date.valueOf())) throw new BadRequestException(`${name} is invalid`);
+  return date;
 }
 
 function readIntegerValue(value: Record<string, unknown>, name: string): number {

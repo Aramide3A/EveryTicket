@@ -39,6 +39,82 @@ export async function createOwnedEvent({
   return event;
 }
 
+export async function pageOwnedEvents({
+  database,
+  organizerProfileId,
+  page,
+  pageSize,
+  skip,
+  status,
+  query,
+  dateField,
+  dateFrom,
+  dateTo,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  page: number;
+  pageSize: number;
+  skip: number;
+  status?: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED';
+  query?: string;
+  dateField?: 'event' | 'created';
+  dateFrom?: Date;
+  dateTo?: Date;
+}): Promise<{ items: Array<{ id: string; title: string; slug: string; status: string; startAt: Date; endAt: Date; createdAt: Date; confirmedTicketsSold: number; ticketSubtotalKobo: number }>; page: number; pageSize: number; total: number }> {
+  const dateColumn = dateField === 'created' ? 'createdAt' : 'startAt';
+  const where: Prisma.EventWhereInput = {
+    organizerProfileId,
+    ...(status ? { status } : {}),
+    ...(query?.trim()
+      ? {
+          OR: [
+            { title: { contains: query.trim(), mode: 'insensitive' } },
+            { slug: { contains: query.trim(), mode: 'insensitive' } },
+          ],
+        }
+      : {}),
+    ...(dateFrom || dateTo
+      ? { [dateColumn]: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
+      : {}),
+  };
+  const [events, total] = await database.$transaction([
+    database.event.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: pageSize,
+      select: { id: true, title: true, slug: true, status: true, startAt: true, endAt: true, createdAt: true },
+    }),
+    database.event.count({ where }),
+  ]);
+  const eventIds = events.map((event) => event.id);
+  const [ticketCounts, sales] = await Promise.all([
+    database.ticket.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, order: { status: 'PAID' } },
+      _count: { _all: true },
+    }),
+    database.order.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, status: 'PAID' },
+      _sum: { ticketSubtotalKobo: true },
+    }),
+  ]);
+  const ticketCountByEvent = new Map(ticketCounts.map((row) => [row.eventId, row._count._all]));
+  const salesByEvent = new Map(sales.map((row) => [row.eventId, row._sum.ticketSubtotalKobo ?? 0]));
+  return {
+    items: events.map((event) => ({
+      ...event,
+      confirmedTicketsSold: ticketCountByEvent.get(event.id) ?? 0,
+      ticketSubtotalKobo: salesByEvent.get(event.id) ?? 0,
+    })),
+    page,
+    pageSize,
+    total,
+  };
+}
+
 export async function publishOwnedEvent({
   database,
   organizerProfileId,

@@ -3,6 +3,8 @@ import type { Page } from '../common/http/pagination.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
 import { encodeEmailPayload } from '../worker/email-templates.js';
 
+export { pageOwnedEvents } from '../events/event-catalogue.js';
+
 const ACTIVE_REFUND_STATUSES = ['REQUESTED', 'APPROVED', 'PROCESSING', 'PROCESSED'] as const;
 
 export async function getOrganizerDashboard({

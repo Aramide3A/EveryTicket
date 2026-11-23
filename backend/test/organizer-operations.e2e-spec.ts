@@ -2,6 +2,27 @@ import { randomUUID } from 'node:crypto';
 import { createDatabaseClient } from '../src/persistence/prisma-client.js';
 
 type OrganizerOperations = {
+	pageOwnedEvents(input: {
+		database: ReturnType<typeof createDatabaseClient>;
+		organizerProfileId: string;
+		page: number;
+		pageSize: number;
+		skip: number;
+		status?: "DRAFT" | "PUBLISHED" | "SUSPENDED" | "CANCELLED";
+		query?: string;
+		dateField?: "event" | "created";
+		dateFrom?: Date;
+		dateTo?: Date;
+	}): Promise<{
+		items: Array<{
+			id: string;
+			confirmedTicketsSold: number;
+			ticketSubtotalKobo: number;
+		}>;
+		page: number;
+		pageSize: number;
+		total: number;
+	}>;
   getOrganizerDashboard(input: {
     database: ReturnType<typeof createDatabaseClient>;
     organizerProfileId: string;
@@ -133,6 +154,42 @@ describe('organizer operations', () => {
     await expect(operations.pageOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, status: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
     await expect(operations.listOrganizerOrders({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
   });
+
+	it('pages only an organizer’s matching events with sales totals', async () => {
+		const operations = await loadOrganizerOperations();
+		const databaseUrl = process.env.DATABASE_URL;
+		expect(operations).toBeDefined();
+		if (!operations || !databaseUrl) throw new Error('organizer operations are unavailable');
+
+		client = createDatabaseClient(databaseUrl);
+		await client.$connect();
+		await createDashboardFixture(client, ids);
+
+		await expect(operations.pageOwnedEvents({
+			database: client,
+			organizerProfileId: ids.organizerProfileId,
+			page: 1,
+			pageSize: 10,
+			skip: 0,
+			status: 'PUBLISHED',
+			query: 'Dashboard',
+			dateField: 'event',
+			dateFrom: new Date('2032-01-01T00:00:00.000Z'),
+			dateTo: new Date('2032-01-31T23:59:59.999Z'),
+		})).resolves.toMatchObject({
+			page: 1,
+			pageSize: 10,
+			total: 1,
+			items: [{ id: ids.eventId, confirmedTicketsSold: 1, ticketSubtotalKobo: 2000 }],
+		});
+		await expect(operations.pageOwnedEvents({
+			database: client,
+			organizerProfileId: ids.otherOrganizerProfileId,
+			page: 1,
+			pageSize: 10,
+			skip: 0,
+		})).resolves.toMatchObject({ total: 0, items: [] });
+	});
 
   it('lists only the owner event attendees and escapes CSV formulas', async () => {
     const operations = await loadOrganizerOperations();
