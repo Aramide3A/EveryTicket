@@ -670,6 +670,11 @@ model CarouselImage {
   objectKey     String              @unique
   publicUrl     String
   altText       String
+  eyebrow       String?
+  headline      String?
+  copy          String?
+  ctaLabel      String?
+  ctaHref       String?
   contentType   String
   contentLength Int
   status        CarouselImageStatus @default(PENDING)

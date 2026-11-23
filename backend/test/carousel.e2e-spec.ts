@@ -3,7 +3,7 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { createApi } from '../src/api.js';
 import { createDatabaseClient } from '../src/persistence/prisma-client.js';
-import { cleanupCarouselImages, completeCarouselUpload, createCarouselUploadIntent, listAdminCarouselImages, listPublicCarouselImages, removeCarouselImage } from '../src/media/carousel-operations.js';
+import { cleanupCarouselImages, completeCarouselUpload, createCarouselUploadIntent, listAdminCarouselImages, listPublicCarouselImages, removeCarouselImage, updateCarouselSlide } from '../src/media/carousel-operations.js';
 import { createR2ObjectStore } from '../src/worker/r2-object-store.js';
 
 // Requires an isolated, migrated DATABASE_URL; no live R2 credentials are used.
@@ -20,8 +20,9 @@ describe('carousel lifecycle and authorization', () => {
   const config = { endpoint: 'https://account.r2.cloudflarestorage.com', bucket: 'test', accessKeyId: 'test', secretAccessKey: 'test', publicMediaUrl: 'https://media.example.test' };
   const createUpload = async () => { const objectKey = `carousel/${randomUUID()}.png`; return { objectKey, uploadUrl: `https://upload.example.test/${objectKey}`, publicUrl: `${config.publicMediaUrl}/${objectKey}` }; };
   const context = () => ({ database, adminProfileId });
+  const slide = { eyebrow: '  The EveryTicket experience  ', headline: '  A night worth remembering  ', copy: '  Discover the city\'s next great night.  ', ctaLabel: '  Find tickets  ', ctaHref: ' /discover ' };
   async function intent(overrides: Record<string, unknown> = {}) {
-    const result = await createCarouselUploadIntent({ ...context(), altText: '  Concert artwork  ', contentType: 'image/png', contentLength: 1024, createUpload, now, ...overrides });
+    const result = await createCarouselUploadIntent({ ...context(), altText: '  Concert artwork  ', contentType: 'image/png', contentLength: 1024, createUpload, now, ...slide, ...overrides });
     imageIds.push(result.imageId);
     return result.imageId;
   }
@@ -65,25 +66,25 @@ describe('carousel lifecycle and authorization', () => {
     // Invalid data reaches operation validation for an administrator, without touching R2.
     await request(server).post('/api/v1/admin/carousel/images/upload-intent').set('Cookie', cookies.ADMIN).send({}).expect(400);
     for (const role of ['ANONYMOUS', 'CUSTOMER', 'ORGANIZER', 'BLOCKED']) {
-      for (const [method, path] of [['get', ''], ['post', '/upload-intent'], ['post', '/missing/complete'], ['delete', '/missing']] as const) {
+      for (const [method, path] of [['get', ''], ['post', '/upload-intent'], ['post', '/missing/complete'], ['patch', '/missing'], ['delete', '/missing']] as const) {
         const operation = request(server)[method](`/api/v1/admin/carousel/images${path}`);
         if (cookies[role]) operation.set('Cookie', cookies[role]);
         await operation.expect(401);
       }
       const denied = { database, adminProfileId: profiles[role] ?? 'missing' };
       await expect(listAdminCarouselImages(denied)).rejects.toThrow('administrator');
-      await expect(createCarouselUploadIntent({ ...denied, altText: 'a', contentType: 'image/png', contentLength: 1, createUpload, now })).rejects.toThrow('administrator');
+      await expect(createCarouselUploadIntent({ ...denied, altText: 'a', contentType: 'image/png', contentLength: 1, createUpload, now, ...slide })).rejects.toThrow('administrator');
       await expect(completeCarouselUpload({ ...denied, imageId: 'missing', now, verifyUploadedObject: verified })).rejects.toThrow('administrator');
       await expect(removeCarouselImage({ ...denied, imageId: 'missing', deleteObject: async () => undefined })).rejects.toThrow('administrator');
     }
   });
 
   it('validates image type, size and trimmed alt text before asking R2 for an upload', async () => {
-    for (const fields of [{ altText: ' ' }, { altText: 'a'.repeat(301) }, { contentType: 'image/svg+xml' }, { contentLength: 0 }, { contentLength: 5242881 }, { contentLength: 1.5 }]) {
+    for (const fields of [{ altText: ' ' }, { headline: ' ' }, { copy: 'a'.repeat(301) }, { ctaHref: 'javascript:alert(1)' }, { ctaHref: 'http://example.test' }, { altText: 'a'.repeat(301) }, { contentType: 'image/svg+xml' }, { contentLength: 0 }, { contentLength: 5242881 }, { contentLength: 1.5 }]) {
       await expect(intent(fields)).rejects.toThrow();
     }
     const id = await intent();
-    expect((await database.carouselImage.findUniqueOrThrow({ where: { id } })).altText).toBe('Concert artwork');
+    expect(await database.carouselImage.findUniqueOrThrow({ where: { id } })).toMatchObject({ altText: 'Concert artwork', eyebrow: 'The EveryTicket experience', headline: 'A night worth remembering', copy: "Discover the city's next great night.", ctaLabel: 'Find tickets', ctaHref: '/discover' });
     await expect(intent({ createUpload: async () => ({ objectKey: 'events/other/media/image.png', uploadUrl: 'url', publicUrl: 'url' }) })).rejects.toThrow('object key');
   });
 
@@ -100,7 +101,17 @@ describe('carousel lifecycle and authorization', () => {
     expect((await listPublicCarouselImages(database)).filter((image) => imageIds.includes(image.id)).map((image) => image.id)).toEqual([first, second].sort());
     expect(await database.auditLog.count({ where: { targetId: first, action: 'CAROUSEL_IMAGE_PUBLISHED' } })).toBe(1);
     const publicResponse = await request(app.getHttpServer()).get('/api/v1/carousel/images').expect(200);
-    expect(publicResponse.body.items.find((image: { id: string }) => image.id === first)).toEqual({ id: first, publicUrl: expect.any(String), altText: 'Concert artwork' });
+    expect(publicResponse.body.items.find((image: { id: string }) => image.id === first)).toEqual({ id: first, publicUrl: expect.any(String), altText: 'Concert artwork', eyebrow: 'The EveryTicket experience', headline: 'A night worth remembering', copy: "Discover the city's next great night.", ctaLabel: 'Find tickets', ctaHref: '/discover' });
+  });
+
+  it('allows administrators to edit a published slide without replacing its image', async () => {
+    const id = await intent();
+    await completeCarouselUpload({ ...context(), imageId: id, now, verifyUploadedObject: verified });
+    await updateCarouselSlide({ ...context(), imageId: id, eyebrow: 'Featured', headline: 'New headline', copy: 'A fresh description.', ctaLabel: 'Explore now', ctaHref: 'https://example.test/events' });
+    expect((await listPublicCarouselImages(database)).find((image) => image.id === id)).toMatchObject({ eyebrow: 'Featured', headline: 'New headline', copy: 'A fresh description.', ctaLabel: 'Explore now', ctaHref: 'https://example.test/events' });
+    await request(app.getHttpServer()).patch(`/api/v1/admin/carousel/images/${id}`).set('Cookie', cookies.ADMIN).send({ eyebrow: 'Highlights', headline: 'HTTP update', copy: 'Updated over HTTP.', ctaLabel: 'View event', ctaHref: '/events' }).expect(200);
+    expect((await database.carouselImage.findUniqueOrThrow({ where: { id } })).headline).toBe('HTTP update');
+    await expect(updateCarouselSlide({ ...context(), imageId: id, eyebrow: 'Bad', headline: 'Bad URL', copy: 'Nope', ctaLabel: 'Go', ctaHref: 'javascript:alert(1)' })).rejects.toThrow('ctaHref');
   });
 
   it('expires pending uploads and retries deletion failures while still cleaning other objects', async () => {
