@@ -23,6 +23,7 @@ async function loadWorkerConfig(): Promise<WorkerConfigModule | undefined> {
 
 const environment: NodeJS.ProcessEnv = {
   DATABASE_URL: 'postgresql://user:password@database.example.test:5432/everythingticket?sslmode=require',
+  PUBLIC_APP_URL: 'https://everyticket.example.test',
   REDIS_URL: 'rediss://user:password@redis.example.test:6380',
   PAYSTACK_SECRET_KEY: 'sk_test_value',
   ADMISSION_TOKEN_SECRET: 'a-long-ticket-credential-secret',
@@ -43,6 +44,7 @@ describe('worker configuration', () => {
 
     expect(workerConfig.readWorkerConfig(environment)).toEqual({
       databaseUrl: environment.DATABASE_URL,
+      publicAppUrl: environment.PUBLIC_APP_URL,
       redisUrl: environment.REDIS_URL,
       paystackSecretKey: environment.PAYSTACK_SECRET_KEY,
       admissionTokenSecret: environment.ADMISSION_TOKEN_SECRET,

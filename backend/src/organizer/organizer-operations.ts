@@ -1,6 +1,9 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import type { Page } from '../common/http/pagination.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
+
+export { pageOwnedEvents } from '../events/event-catalogue.js';
 
 const ACTIVE_REFUND_STATUSES = ['REQUESTED', 'APPROVED', 'PROCESSING', 'PROCESSED'] as const;
 
@@ -84,6 +87,80 @@ export async function getOrganizerDashboard({
     guestCheckIns,
     salesByTicketType,
     salesTrend: [...trend.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([date, values]) => ({ date, ...values })),
+  };
+}
+
+export async function getOrganizerOverview({
+  database,
+  organizerProfileId,
+  dateFrom,
+  dateTo,
+  now,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  now: Date;
+}): Promise<{
+  totalEvents: number;
+  liveEvents: number;
+  confirmedTickets: number;
+  grossTicketSalesKobo: number;
+  upcomingAttendees: number;
+  availablePayoutKobo: number;
+  salesTrend: Array<{ date: string; ticketQuantity: number; ticketSubtotalKobo: number }>;
+}> {
+  const eventScope = {
+    organizerProfileId,
+    organizer: { status: 'ACTIVE' as const, ...profileRoleFilter('ORGANIZER') },
+  };
+  const paidAt = {
+    not: null,
+    ...(dateFrom ? { gte: dateFrom } : {}),
+    ...(dateTo ? { lte: dateTo } : {}),
+  };
+  const [totalEvents, liveEvents, periodOrders, upcomingAttendees, completedOrders, refunds, payouts] = await Promise.all([
+    database.event.count({ where: eventScope }),
+    database.event.count({ where: { ...eventScope, status: 'PUBLISHED' } }),
+    database.order.findMany({
+      where: { status: 'PAID', paidAt, event: eventScope },
+      select: { paidAt: true, ticketSubtotalKobo: true, tickets: { select: { id: true } } },
+    }),
+    database.ticket.count({ where: { order: { status: 'PAID' }, event: { ...eventScope, startAt: { gt: now } } } }),
+    database.order.findMany({
+      where: { status: 'PAID', event: { ...eventScope, endAt: { lte: now } } },
+      select: { ticketSubtotalKobo: true },
+    }),
+    database.refundRequest.findMany({
+      where: { status: { in: [...ACTIVE_REFUND_STATUSES] }, event: { ...eventScope, endAt: { lte: now } } },
+      select: { ticketRefundKobo: true },
+    }),
+    database.payoutRequest.findMany({
+      where: { status: { in: ['REQUESTED', 'APPROVED', 'PAID'] }, event: { ...eventScope, endAt: { lte: now } } },
+      select: { requestedAmountKobo: true },
+    }),
+  ]);
+  const salesTrend = new Map<string, { ticketQuantity: number; ticketSubtotalKobo: number }>();
+  for (const order of periodOrders) {
+    if (!order.paidAt) continue;
+    const date = order.paidAt.toISOString().slice(0, 10);
+    const point = salesTrend.get(date) ?? { ticketQuantity: 0, ticketSubtotalKobo: 0 };
+    point.ticketQuantity += order.tickets.length;
+    point.ticketSubtotalKobo += order.ticketSubtotalKobo;
+    salesTrend.set(date, point);
+  }
+  const completedSalesKobo = completedOrders.reduce((total, order) => total + order.ticketSubtotalKobo, 0);
+  const reservedRefundsKobo = refunds.reduce((total, refund) => total + refund.ticketRefundKobo, 0);
+  const reservedPayoutsKobo = payouts.reduce((total, payout) => total + payout.requestedAmountKobo, 0);
+  return {
+    totalEvents,
+    liveEvents,
+    confirmedTickets: periodOrders.reduce((total, order) => total + order.tickets.length, 0),
+    grossTicketSalesKobo: periodOrders.reduce((total, order) => total + order.ticketSubtotalKobo, 0),
+    upcomingAttendees,
+    availablePayoutKobo: Math.max(completedSalesKobo - reservedRefundsKobo - reservedPayoutsKobo, 0),
+    salesTrend: [...salesTrend.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([date, values]) => ({ date, ...values })),
   };
 }
 
@@ -252,7 +329,7 @@ export async function createRefundRequest({
         status: 'PAID',
         event: { organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
       },
-      select: { eventId: true, platformFeeKobo: true, tickets: { where: { id: { in: ticketIds } }, select: { id: true, priceKobo: true } } },
+      select: { eventId: true, reference: true, platformFeeKobo: true, event: { select: { title: true } }, tickets: { where: { id: { in: ticketIds } }, select: { id: true, priceKobo: true } } },
     });
     if (!order) throw new Error('order is unavailable to this organizer');
     await transaction.$queryRaw`SELECT id FROM "order" WHERE id = ${orderId} FOR UPDATE`;
@@ -282,6 +359,8 @@ export async function createRefundRequest({
       select: { id: true, status: true, totalRefundKobo: true },
     });
     await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'REFUND_REQUEST_CREATED', targetType: 'REFUND_REQUEST', targetId: refund.id, details: { orderId, ticketIds } } });
+    const organizer = await transaction.applicationProfile.findUniqueOrThrow({ where: { id: organizerProfileId }, select: { user: { select: { name: true, email: true } } } });
+    await transaction.notificationJob.create({ data: { type: 'REFUND_REQUEST_RECEIVED', recipientEmail: organizer.user.email, idempotencyKey: `refund:${refund.id}:requested`, content: encodeEmailPayload({ name: organizer.user.name, eventTitle: order.event.title, orderReference: order.reference, requestedAmountKobo: totalRefundKobo, reason: reason.trim() }) } });
     return { id: refund.id, status: 'REQUESTED', totalRefundKobo: refund.totalRefundKobo };
   });
 }
@@ -300,7 +379,7 @@ export async function createPayoutRequest({
   return database.$transaction(async (transaction) => {
     const event = await transaction.event.findFirst({
       where: { id: eventId, organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
-      select: { endAt: true },
+      select: { endAt: true, title: true, organizer: { select: { user: { select: { name: true, email: true } } } }, },
     });
     if (!event) throw new Error('event is unavailable to this organizer');
     if (event.endAt > now) throw new Error('payout is unavailable before the event ends');
@@ -336,6 +415,7 @@ export async function createPayoutRequest({
       select: { id: true, requestedAmountKobo: true, calculatedPayableKobo: true },
     });
     await transaction.auditLog.create({ data: { actorProfileId: organizerProfileId, action: 'PAYOUT_REQUEST_CREATED', targetType: 'PAYOUT_REQUEST', targetId: payout.id, details: { eventId, requestedAmountKobo: payout.requestedAmountKobo } } });
+    await transaction.notificationJob.create({ data: { type: 'PAYOUT_REQUEST_RECEIVED', recipientEmail: event.organizer.user.email, idempotencyKey: `payout:${payout.id}:requested`, content: encodeEmailPayload({ name: event.organizer.user.name, eventTitle: event.title, requestedAmountKobo: payout.requestedAmountKobo, calculatedPayableKobo: payout.calculatedPayableKobo, requestedAt: now.toISOString() }) } });
     return { id: payout.id, status: 'REQUESTED', requestedAmountKobo: payout.requestedAmountKobo, calculatedPayableKobo: payout.calculatedPayableKobo };
   });
 }

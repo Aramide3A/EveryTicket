@@ -27,11 +27,13 @@ describe('event catalogue', () => {
 
   afterEach(async () => {
     if (client) {
-      await client.eventMedia.deleteMany({ where: { eventId: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
-      await client.ticketType.deleteMany({ where: { eventId: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
-      await client.event.deleteMany({ where: { id: { in: [ids.eventId ?? '', ids.createdEventId ?? ''] } } });
+      const eventIds = [ids.eventId, ids.createdEventId, ids.customerEventId].filter(Boolean);
+      const userIds = [ids.userId, ids.customerUserId].filter(Boolean);
+      await client.eventMedia.deleteMany({ where: { eventId: { in: eventIds } } });
+      await client.ticketType.deleteMany({ where: { eventId: { in: eventIds } } });
+      await client.event.deleteMany({ where: { id: { in: eventIds } } });
       if (ids.categoryId) await client.eventCategory.deleteMany({ where: { id: ids.categoryId } });
-      if (ids.userId) await client.auth_user.deleteMany({ where: { id: ids.userId } });
+      await client.auth_user.deleteMany({ where: { id: { in: userIds } } });
       await client.$disconnect();
     }
     Object.keys(ids).forEach((key) => delete ids[key]);
@@ -90,6 +92,27 @@ describe('event catalogue', () => {
     await catalogue.publishOwnedEvent({ database: client, organizerProfileId: ids.profileId, eventId: ids.eventId, now: new Date('2032-01-01T10:00:00.000Z') });
 
     await expect(catalogue.getPublicEvent({ database: client, slug: ids.eventId })).resolves.toEqual(expect.objectContaining({ id: ids.eventId, slug: 'design-summit' }));
+  });
+
+  it('does not expose events owned by customer-only profiles through public discovery', async () => {
+    const catalogue = await loadEventCatalogue();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(catalogue).toBeDefined();
+    if (!catalogue || !databaseUrl) throw new Error('event catalogue is unavailable');
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createFixture(client, ids);
+    Object.assign(ids, {
+      customerUserId: randomUUID(),
+      customerProfileId: randomUUID(),
+      customerEventId: randomUUID(),
+    });
+    await client.$executeRaw`INSERT INTO auth_user (id, name, email, "emailVerified", "createdAt", "updatedAt") VALUES (${ids.customerUserId}, 'Customer', ${`${ids.customerUserId}@example.test`}, true, NOW(), NOW())`;
+    await client.$executeRaw`INSERT INTO application_profile (id, "userId", role, status, "createdAt", "updatedAt") VALUES (${ids.customerProfileId}, ${ids.customerUserId}, 'CUSTOMER', 'ACTIVE', NOW(), NOW())`;
+    await client.$executeRaw`INSERT INTO event (id, "organizerProfileId", "categoryId", title, slug, description, city, state, venue, address, "timeZone", "startAt", "endAt", status, "publishedAt", "createdAt", "updatedAt") VALUES (${ids.customerEventId}, ${ids.customerProfileId}, ${ids.categoryId}, 'Customer Event', 'customer-event', 'Not a public organizer event', 'Lagos', 'Lagos', 'Venue', 'Address', 'Africa/Lagos', '2032-02-01T10:00:00.000Z', '2032-02-01T12:00:00.000Z', 'PUBLISHED', NOW(), NOW(), NOW())`;
+
+    await expect(catalogue.listPublicEvents({ database: client, query: 'Customer Event' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
+    await expect(catalogue.getPublicEvent({ database: client, slug: 'customer-event' })).resolves.toBeNull();
   });
 
   it('returns complete public presentation fields and only ready media', async () => {

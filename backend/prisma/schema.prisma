@@ -161,6 +161,16 @@ enum NotificationJobType {
   RSVP_CONFIRMATION
   REFUND_DECISION
   PAYOUT_DECISION
+  WELCOME
+  PAYMENT_FAILED
+  REFUND_REQUEST_RECEIVED
+  PAYOUT_REQUEST_RECEIVED
+  EVENT_PUBLISHED
+  EVENT_CANCELLED
+  RSVP_DECLINED
+  CHECK_IN_CONFIRMATION
+  ACCOUNT_RESTRICTED
+  ACCOUNT_RESTORED
 }
 
 enum TicketDocumentStatus {
@@ -646,4 +656,29 @@ model AuditLog {
   @@index([targetType, targetId, createdAt])
   @@index([actorProfileId, createdAt])
   @@map("audit_log")
+}
+
+
+enum CarouselImageStatus {
+  PENDING
+  READY
+  DELETING
+}
+
+model CarouselImage {
+  id            String              @id @default(cuid())
+  objectKey     String              @unique
+  publicUrl     String
+  altText       String
+  contentType   String
+  contentLength Int
+  status        CarouselImageStatus @default(PENDING)
+  expiresAt     DateTime
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  @@index([status, createdAt, id])
+  @@index([status, expiresAt])
+  @@map("carousel_image")
 }

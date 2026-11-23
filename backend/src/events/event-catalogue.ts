@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 export async function createOwnedEvent({
   database,
@@ -38,6 +39,82 @@ export async function createOwnedEvent({
   return event;
 }
 
+export async function pageOwnedEvents({
+  database,
+  organizerProfileId,
+  page,
+  pageSize,
+  skip,
+  status,
+  query,
+  dateField,
+  dateFrom,
+  dateTo,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  page: number;
+  pageSize: number;
+  skip: number;
+  status?: 'DRAFT' | 'PUBLISHED' | 'SUSPENDED' | 'CANCELLED';
+  query?: string;
+  dateField?: 'event' | 'created';
+  dateFrom?: Date;
+  dateTo?: Date;
+}): Promise<{ items: Array<{ id: string; title: string; slug: string; status: string; startAt: Date; endAt: Date; createdAt: Date; confirmedTicketsSold: number; ticketSubtotalKobo: number }>; page: number; pageSize: number; total: number }> {
+  const dateColumn = dateField === 'created' ? 'createdAt' : 'startAt';
+  const where: Prisma.EventWhereInput = {
+    organizerProfileId,
+    ...(status ? { status } : {}),
+    ...(query?.trim()
+      ? {
+          OR: [
+            { title: { contains: query.trim(), mode: 'insensitive' } },
+            { slug: { contains: query.trim(), mode: 'insensitive' } },
+          ],
+        }
+      : {}),
+    ...(dateFrom || dateTo
+      ? { [dateColumn]: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } }
+      : {}),
+  };
+  const [events, total] = await database.$transaction([
+    database.event.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: pageSize,
+      select: { id: true, title: true, slug: true, status: true, startAt: true, endAt: true, createdAt: true },
+    }),
+    database.event.count({ where }),
+  ]);
+  const eventIds = events.map((event) => event.id);
+  const [ticketCounts, sales] = await Promise.all([
+    database.ticket.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, order: { status: 'PAID' } },
+      _count: { _all: true },
+    }),
+    database.order.groupBy({
+      by: ['eventId'],
+      where: { eventId: { in: eventIds }, status: 'PAID' },
+      _sum: { ticketSubtotalKobo: true },
+    }),
+  ]);
+  const ticketCountByEvent = new Map(ticketCounts.map((row) => [row.eventId, row._count._all]));
+  const salesByEvent = new Map(sales.map((row) => [row.eventId, row._sum.ticketSubtotalKobo ?? 0]));
+  return {
+    items: events.map((event) => ({
+      ...event,
+      confirmedTicketsSold: ticketCountByEvent.get(event.id) ?? 0,
+      ticketSubtotalKobo: salesByEvent.get(event.id) ?? 0,
+    })),
+    page,
+    pageSize,
+    total,
+  };
+}
+
 export async function publishOwnedEvent({
   database,
   organizerProfileId,
@@ -58,10 +135,16 @@ export async function publishOwnedEvent({
       endAt: { gt: now },
       startAt: { gt: now },
     },
-    select: { id: true },
+    select: { id: true, title: true, slug: true, startAt: true, venue: true, organizer: { select: { user: { select: { email: true } } } } },
   });
   if (!event) throw new Error('event is unavailable to this organizer');
   await database.event.update({ where: { id: event.id }, data: { status: 'PUBLISHED', publishedAt: now } });
+  await database.notificationJob.create({
+    data: {
+      type: 'EVENT_PUBLISHED', recipientEmail: event.organizer.user.email, idempotencyKey: `event:${event.id}:published`,
+      content: encodeEmailPayload({ eventTitle: event.title, eventSlug: event.slug, startAt: event.startAt.toISOString(), venue: event.venue }),
+    },
+  });
   await recordOrganizerAudit(database, organizerProfileId, 'EVENT_PUBLISHED', 'EVENT', event.id);
 }
 
@@ -88,7 +171,7 @@ export async function listPublicEvents({
   if (!['upcoming', 'featured', 'popular'].includes(sort)) throw new RangeError('event sort is invalid');
   const where = {
     status: 'PUBLISHED' as const,
-    organizer: { status: 'ACTIVE' as const },
+    organizer: { status: 'ACTIVE' as const, ...profileRoleFilter('ORGANIZER') },
     startAt: { gt: now },
     ...(query ? { OR: [{ title: { contains: query, mode: 'insensitive' as const } }, { description: { contains: query, mode: 'insensitive' as const } }] } : {}),
     ...(city ? { city: { equals: city, mode: 'insensitive' as const } } : {}),
@@ -162,7 +245,7 @@ export async function getPublicEvent({
   now?: Date;
 }): Promise<{ id: string; slug: string; title: string; description: string; city: string; state: string; venue: string; address: string; timeZone: string; startAt: Date; endAt: Date; category: { name: string; slug: string }; organizer: { name: string }; media: Array<{ id: string; publicUrl: string; isCover: boolean }>; ticketTypes: Array<{ id: string; name: string; description: string | null; priceKobo: number; salesStartAt: Date | null; salesEndAt: Date | null; maxPerOrder: number | null; availableTickets: number }> } | null> {
   const event = await database.event.findFirst({
-    where: { OR: [{ slug }, { id: slug }], status: 'PUBLISHED', organizer: { status: 'ACTIVE' }, startAt: { gt: now } },
+    where: { OR: [{ slug }, { id: slug }], status: 'PUBLISHED', organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') }, startAt: { gt: now } },
     select: { id: true, slug: true, title: true, description: true, city: true, state: true, venue: true, address: true, timeZone: true, startAt: true, endAt: true, category: { select: { name: true, slug: true } }, organizer: { select: { user: { select: { name: true } } } }, media: { where: { status: 'READY' }, orderBy: [{ isCover: 'desc' }, { position: 'asc' }, { createdAt: 'asc' }], select: { id: true, publicUrl: true, isCover: true } }, ticketTypes: { where: { isActive: true }, orderBy: { priceKobo: 'asc' }, select: { id: true, name: true, description: true, priceKobo: true, salesStartAt: true, salesEndAt: true, maxPerOrder: true, capacity: true, tickets: { where: { status: 'ACTIVE' }, select: { id: true } }, holds: { where: { expiresAt: { gt: now } }, select: { quantity: true } } } } },
   });
   return event ? {

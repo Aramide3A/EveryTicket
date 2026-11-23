@@ -1,5 +1,6 @@
 export type WorkerConfig = {
   databaseUrl: string;
+  publicAppUrl: string;
   redisUrl: string;
   paystackSecretKey: string;
   admissionTokenSecret: string;
@@ -16,6 +17,7 @@ export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
   validateRedisUrl(redisUrl);
   return {
     databaseUrl: required(environment, 'DATABASE_URL'),
+    publicAppUrl: httpsUrl(required(environment, 'PUBLIC_APP_URL'), 'PUBLIC_APP_URL'),
     redisUrl,
     paystackSecretKey: required(environment, 'PAYSTACK_SECRET_KEY'),
     admissionTokenSecret: required(environment, 'ADMISSION_TOKEN_SECRET'),

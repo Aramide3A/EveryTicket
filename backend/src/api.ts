@@ -81,6 +81,7 @@ export async function createApi(): Promise<INestApplication> {
 export function sensitiveAction(request: Pick<Request, 'method' | 'url'>): string | null {
   if (request.method !== 'POST') return null;
   if (request.url.startsWith('/api/auth/')) return 'authentication';
+  if (request.url === '/api/v1/admin/sign-in') return 'authentication';
   if (request.url === '/api/v1/organizer-registration') return 'authentication';
   if (request.url.startsWith('/api/v1/rsvp/')) return 'rsvp-submission';
   if (request.url === '/api/v1/orders' || request.url.startsWith('/api/v1/orders/')) return 'checkout';

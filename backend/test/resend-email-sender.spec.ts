@@ -3,10 +3,10 @@ type ResendEmailSenderModule = {
     config: { apiKey: string; from: string };
     client?: {
       emails: {
-        send(message: { from: string; to: string; subject: string; text: string }): Promise<{ data: { id: string } | null; error: { message: string } | null }>;
+        send(message: { from: string; to: string; subject: string; text: string; html?: string; attachments?: Array<{ filename: string; content: Buffer; contentType: string }> }): Promise<{ data: { id: string } | null; error: { message: string } | null }>;
       };
     };
-  }): { send(message: { to: string; subject: string; text: string }): Promise<void> };
+  }): { send(message: { to: string; subject: string; text: string; html?: string; attachments?: Array<{ filename: string; content: Uint8Array; contentType: 'application/pdf' }> }): Promise<void> };
 };
 
 async function loadResendEmailSender(): Promise<ResendEmailSenderModule | undefined> {
@@ -43,5 +43,21 @@ describe('Resend email sender', () => {
     });
 
     await expect(sender.send({ to: 'customer@example.test', subject: 'Order confirmed', text: 'Your order reference is ET-001.' })).rejects.toThrow('Domain is not verified');
+  });
+
+  it('passes ticket PDF attachments to Resend as binary content', async () => {
+    const resend = await loadResendEmailSender();
+    expect(resend).toBeDefined();
+    if (!resend) throw new Error('Resend email sender is unavailable');
+    const messages: Array<{ attachments?: Array<{ filename: string; content: Buffer; contentType: string }> }> = [];
+    const sender = resend.createResendEmailSender({
+      config: { apiKey: 're_test', from: 'EverythingTicket <no-reply@example.test>' },
+      client: { emails: { send: async (message) => { messages.push(message); return { data: { id: 'email_123' }, error: null }; } } },
+    });
+
+    await sender.send({ to: 'customer@example.test', subject: 'Tickets ready', text: 'Attached.', html: '<p>Attached.</p>', attachments: [{ filename: 'regular-ticket-1.pdf', content: new Uint8Array([1, 2, 3]), contentType: 'application/pdf' }] });
+
+    expect(messages[0]?.attachments?.[0]).toMatchObject({ filename: 'regular-ticket-1.pdf', contentType: 'application/pdf' });
+    expect(messages[0]?.attachments?.[0]?.content).toEqual(Buffer.from([1, 2, 3]));
   });
 });

@@ -6,6 +6,7 @@ describe('guest checkout end-to-end contracts', () => {
 
     expect(api.sensitiveAction({ method: 'POST', url: '/api/v1/orders' } as never)).toBe('checkout');
     expect(api.sensitiveAction({ method: 'POST', url: '/api/v1/organizer-registration' } as never)).toBe('authentication');
+    expect(api.sensitiveAction({ method: 'POST', url: '/api/v1/admin/sign-in' } as never)).toBe('authentication');
   });
 
   it('looks up order status by its high-entropy reference without requiring a profile', async () => {

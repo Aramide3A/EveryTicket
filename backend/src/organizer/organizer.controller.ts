@@ -8,7 +8,7 @@ import { readPagination } from '../common/http/pagination.js';
 import { createR2ObjectStore } from '../worker/r2-object-store.js';
 import { readR2Config } from '../worker/worker-config.js';
 import { pageAuditLogs } from '../audit/audit-log.js';
-import { cancelRefundRequest, createPayoutRequest, createRefundRequest, exportOrganizerAttendeesCsv, exportOrganizerCheckInsCsv, exportOrganizerPayoutReceiptCsv, getOrganizerDashboard, getOrganizerOrderRefundInputs, getOrganizerPayoutRequest, getOrganizerRefundRequest, listOrganizerCheckIns, pageOrganizerAttendees, pageOrganizerOrders, pageOrganizerPayoutRequests, pageOrganizerRefundRequests, updateRefundRequest } from './organizer-operations.js';
+import { cancelRefundRequest, createPayoutRequest, createRefundRequest, exportOrganizerAttendeesCsv, exportOrganizerCheckInsCsv, exportOrganizerPayoutReceiptCsv, getOrganizerDashboard, getOrganizerOrderRefundInputs, getOrganizerOverview, getOrganizerPayoutRequest, getOrganizerRefundRequest, listOrganizerCheckIns, pageOrganizerAttendees, pageOrganizerOrders, pageOrganizerPayoutRequests, pageOrganizerRefundRequests, updateRefundRequest } from './organizer-operations.js';
 
 const runOrganizerDatabaseOperation = createDatabaseOperation('organizer operations are not configured');
 
@@ -27,6 +27,15 @@ export class OrganizerController {
   async dashboard(@Req() request: Request, @Param('eventId') eventId: string) {
     const profile = await requireActiveProfile(request, 'ORGANIZER');
     return this.withDatabase((database) => getOrganizerDashboard({ database, organizerProfileId: profile.id, eventId, now: new Date() }));
+  }
+
+  @Get('overview')
+  async overview(@Req() request: Request, @Query('from') from?: string, @Query('to') to?: string) {
+    const profile = await requireActiveProfile(request, 'ORGANIZER');
+    const dateFrom = readOptionalDate(from, false);
+    const dateTo = readOptionalDate(to, true);
+    if (dateFrom && dateTo && dateFrom > dateTo) throw new BadRequestException('from must not be after to');
+    return this.withDatabase((database) => getOrganizerOverview({ database, organizerProfileId: profile.id, dateFrom, dateTo, now: new Date() }));
   }
 
   @Get('events/:eventId/orders')
@@ -233,4 +242,12 @@ function readOptionalEnum<const T extends readonly string[]>(value: string | und
   if (value === undefined) return undefined;
   if (!values.includes(value)) throw new BadRequestException('filter is invalid');
   return value as T[number];
+}
+
+function readOptionalDate(value: string | undefined, endOfDay: boolean): Date | undefined {
+  if (value === undefined) return undefined;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new BadRequestException('date filter is invalid');
+  const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) throw new BadRequestException('date filter is invalid');
+  return date;
 }

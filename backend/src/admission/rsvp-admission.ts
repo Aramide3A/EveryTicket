@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { profileRoleFilter } from '../identity/current-profile.js';
 import { createGuestCredential, readGuestCredential, readTicketCredential } from '../worker/ticket-credential.js';
+import { encodeEmailPayload } from '../worker/email-templates.js';
 
 type AdmissionCode = 'VALID' | 'INVALID' | 'WRONG_EVENT' | 'REVOKED' | 'UNPAID' | 'ALREADY_USED';
 
@@ -142,7 +143,7 @@ export async function submitRsvpResponse({
 
     const link = await transaction.rsvpLink.findUnique({
       where: { tokenDigest: digest(token) },
-      include: { guestList: { include: { categories: true } } },
+      include: { guestList: { include: { categories: true, event: { select: { title: true, slug: true } } } } },
     });
     if (!link || link.revokedAt || !link.guestList.isEnabled || (link.expiresAt && link.expiresAt <= now) || (link.guestList.expiresAt && link.guestList.expiresAt <= now)) {
       throw new Error('RSVP link is unavailable');
@@ -180,7 +181,14 @@ export async function submitRsvpResponse({
           type: 'RSVP_CONFIRMATION',
           recipientEmail: email.trim().toLowerCase(),
           idempotencyKey: `guest:${guest.id}:confirmation`,
-          content: rsvpNotificationContent(guest.id, digest(admissionToken as string), admissionTokenSecret),
+          content: rsvpNotificationContent({ guestId: guest.id, admissionTokenDigest: digest(admissionToken as string), secret: admissionTokenSecret, name: name.trim(), eventTitle: link.guestList.event.title, eventSlug: link.guestList.event.slug }),
+        },
+      });
+    } else {
+      await transaction.notificationJob.create({
+        data: {
+          type: 'RSVP_DECLINED', recipientEmail: email.trim().toLowerCase(), idempotencyKey: `guest:${guest.id}:declined`,
+          content: encodeEmailPayload({ name: name.trim(), eventTitle: link.guestList.event.title, eventSlug: link.guestList.event.slug }),
         },
       });
     }
@@ -226,7 +234,7 @@ export async function reissueGuestCredential({
   const admissionToken = randomBytes(32).toString('base64url');
   await database.$transaction([
     database.guest.update({ where: { id: guest.id }, data: { admissionTokenDigest: digest(admissionToken), credentialStatus: 'ACTIVE' } }),
-    database.notificationJob.create({ data: { type: 'RSVP_CONFIRMATION', recipientEmail: guest.email, content: rsvpNotificationContent(guest.id, digest(admissionToken), admissionTokenSecret), idempotencyKey: `guest:${guest.id}:credential:${randomBytes(12).toString('base64url')}` } }),
+    database.notificationJob.create({ data: { type: 'RSVP_CONFIRMATION', recipientEmail: guest.email, content: rsvpNotificationContent({ guestId: guest.id, admissionTokenDigest: digest(admissionToken), secret: admissionTokenSecret }), idempotencyKey: `guest:${guest.id}:credential:${randomBytes(12).toString('base64url')}` } }),
   ]);
   return { admissionToken };
 }
@@ -338,7 +346,7 @@ export async function addGuest({
       select: { id: true },
     });
     await transaction.notificationJob.create({
-      data: { type: 'RSVP_CONFIRMATION', recipientEmail: email.trim().toLowerCase(), content: rsvpNotificationContent(guest.id, digest(admissionToken), admissionTokenSecret), idempotencyKey: `guest:${guest.id}:confirmation` },
+      data: { type: 'RSVP_CONFIRMATION', recipientEmail: email.trim().toLowerCase(), content: rsvpNotificationContent({ guestId: guest.id, admissionTokenDigest: digest(admissionToken), secret: admissionTokenSecret, name: name.trim() }), idempotencyKey: `guest:${guest.id}:confirmation` },
     });
     return { guestId: guest.id, admissionToken };
   });
@@ -464,7 +472,7 @@ export async function confirmAdmission({
 }): Promise<{ code: Exclude<AdmissionCode, 'VALID'> | 'CHECKED_IN'; checkedInAt?: Date }> {
   const event = await database.event.findFirst({
     where: { id: eventId, organizerProfileId, organizer: { status: 'ACTIVE', ...profileRoleFilter('ORGANIZER') } },
-    select: { id: true },
+    select: { id: true, title: true, venue: true },
   });
   if (!event) throw new Error('event is unavailable to this organizer');
   const credential = await findCredential(database, token, ticketCredentialSecret);
@@ -477,6 +485,15 @@ export async function confirmAdmission({
         ? { eventId, guestId: credential.id, checkedInByProfileId: organizerProfileId, checkedInAt: now }
         : { eventId, ticketId: credential.id, checkedInByProfileId: organizerProfileId, checkedInAt: now },
     });
+    const recipient = credential.kind === 'guest'
+      ? await database.guest.findUnique({ where: { id: credential.id }, select: { email: true, name: true } })
+      : await database.ticket.findUnique({ where: { id: credential.id }, select: { holderEmail: true, holderName: true, ticketTypeName: true } });
+    if (recipient) {
+      const email = 'email' in recipient ? recipient.email : recipient.holderEmail;
+      const attendeeName = 'name' in recipient ? recipient.name : recipient.holderName;
+      const entryType = 'ticketTypeName' in recipient ? recipient.ticketTypeName : 'Guest admission';
+      await database.notificationJob.create({ data: { type: 'CHECK_IN_CONFIRMATION', recipientEmail: email, idempotencyKey: `check-in:${credential.kind}:${credential.id}`, content: encodeEmailPayload({ name: attendeeName, eventTitle: event.title, venue: event.venue, entryType, checkedInAt: now.toISOString() }) } });
+    }
     return { code: 'CHECKED_IN', checkedInAt: now };
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -584,8 +601,8 @@ async function findCredential(database: PrismaClient, token: string, ticketCrede
   return ticketCredential(ticket);
 }
 
-function rsvpNotificationContent(guestId: string, admissionTokenDigest: string, secret?: string): string | undefined {
-  return secret ? `Your RSVP is confirmed. Admission credential: ${createGuestCredential({ guestId, admissionTokenDigest, secret })}` : undefined;
+function rsvpNotificationContent({ guestId, admissionTokenDigest, secret, name, eventTitle, eventSlug }: { guestId: string; admissionTokenDigest: string; secret?: string; name?: string; eventTitle?: string; eventSlug?: string }): string {
+  return encodeEmailPayload({ name, eventTitle, eventSlug, credential: secret ? createGuestCredential({ guestId, admissionTokenDigest, secret }) : undefined });
 }
 
 function ticketCredential(ticket: { id: string; holderName: string; status: 'ACTIVE' | 'REVOKED'; eventId: string; order: { status: string } }): { kind: 'ticket'; id: string; eventId: string; name: string; active: boolean; inactiveCode: 'REVOKED' | 'UNPAID' } {
