@@ -42,6 +42,21 @@ type OrganizerOperations = {
     salesByTicketType: Array<{ ticketTypeId: string; name: string; quantity: number; ticketSubtotalKobo: number }>;
     salesTrend: Array<{ date: string; ticketSubtotalKobo: number; totalPaidKobo: number }>;
   }>;
+  getOrganizerOverview(input: {
+    database: ReturnType<typeof createDatabaseClient>;
+    organizerProfileId: string;
+    dateFrom?: Date;
+    dateTo?: Date;
+    now: Date;
+  }): Promise<{
+    totalEvents: number;
+    liveEvents: number;
+    confirmedTickets: number;
+    grossTicketSalesKobo: number;
+    upcomingAttendees: number;
+    availablePayoutKobo: number;
+    salesTrend: Array<{ date: string; ticketQuantity: number; ticketSubtotalKobo: number }>;
+  }>;
   listOrganizerAttendees(input: {
     database: ReturnType<typeof createDatabaseClient>;
     organizerProfileId: string;
@@ -153,6 +168,33 @@ describe('organizer operations', () => {
     await expect(operations.pageOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, query: 'no-match', status: 'PAID' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
     await expect(operations.pageOrganizerOrders({ database: client, organizerProfileId: ids.organizerProfileId, eventId: ids.eventId, page: 1, pageSize: 10, skip: 0, status: 'CANCELLED' })).resolves.toEqual(expect.objectContaining({ items: [], total: 0 }));
     await expect(operations.listOrganizerOrders({ database: client, organizerProfileId: ids.otherOrganizerProfileId, eventId: ids.eventId })).rejects.toThrow('event is unavailable to this organizer');
+  });
+
+  it('aggregates the organizer overview KPIs and sales chart for a reporting period', async () => {
+    const operations = await loadOrganizerOperations();
+    const databaseUrl = process.env.DATABASE_URL;
+    expect(operations).toBeDefined();
+    if (!operations || !databaseUrl) throw new Error('organizer operations are unavailable');
+
+    client = createDatabaseClient(databaseUrl);
+    await client.$connect();
+    await createDashboardFixture(client, ids);
+
+    await expect(operations.getOrganizerOverview({
+      database: client,
+      organizerProfileId: ids.organizerProfileId,
+      dateFrom: new Date('2031-12-01T00:00:00.000Z'),
+      dateTo: new Date('2031-12-31T23:59:59.999Z'),
+      now: new Date('2032-01-01T00:00:00.000Z'),
+    })).resolves.toEqual({
+      totalEvents: 1,
+      liveEvents: 1,
+      confirmedTickets: 1,
+      grossTicketSalesKobo: 2000,
+      upcomingAttendees: 1,
+      availablePayoutKobo: 0,
+      salesTrend: [{ date: '2031-12-01', ticketQuantity: 1, ticketSubtotalKobo: 2000 }],
+    });
   });
 
 	it('pages only an organizer’s matching events with sales totals', async () => {

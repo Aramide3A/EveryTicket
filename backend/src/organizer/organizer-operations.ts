@@ -90,6 +90,80 @@ export async function getOrganizerDashboard({
   };
 }
 
+export async function getOrganizerOverview({
+  database,
+  organizerProfileId,
+  dateFrom,
+  dateTo,
+  now,
+}: {
+  database: PrismaClient;
+  organizerProfileId: string;
+  dateFrom?: Date;
+  dateTo?: Date;
+  now: Date;
+}): Promise<{
+  totalEvents: number;
+  liveEvents: number;
+  confirmedTickets: number;
+  grossTicketSalesKobo: number;
+  upcomingAttendees: number;
+  availablePayoutKobo: number;
+  salesTrend: Array<{ date: string; ticketQuantity: number; ticketSubtotalKobo: number }>;
+}> {
+  const eventScope = {
+    organizerProfileId,
+    organizer: { status: 'ACTIVE' as const, ...profileRoleFilter('ORGANIZER') },
+  };
+  const paidAt = {
+    not: null,
+    ...(dateFrom ? { gte: dateFrom } : {}),
+    ...(dateTo ? { lte: dateTo } : {}),
+  };
+  const [totalEvents, liveEvents, periodOrders, upcomingAttendees, completedOrders, refunds, payouts] = await Promise.all([
+    database.event.count({ where: eventScope }),
+    database.event.count({ where: { ...eventScope, status: 'PUBLISHED' } }),
+    database.order.findMany({
+      where: { status: 'PAID', paidAt, event: eventScope },
+      select: { paidAt: true, ticketSubtotalKobo: true, tickets: { select: { id: true } } },
+    }),
+    database.ticket.count({ where: { order: { status: 'PAID' }, event: { ...eventScope, startAt: { gt: now } } } }),
+    database.order.findMany({
+      where: { status: 'PAID', event: { ...eventScope, endAt: { lte: now } } },
+      select: { ticketSubtotalKobo: true },
+    }),
+    database.refundRequest.findMany({
+      where: { status: { in: [...ACTIVE_REFUND_STATUSES] }, event: { ...eventScope, endAt: { lte: now } } },
+      select: { ticketRefundKobo: true },
+    }),
+    database.payoutRequest.findMany({
+      where: { status: { in: ['REQUESTED', 'APPROVED', 'PAID'] }, event: { ...eventScope, endAt: { lte: now } } },
+      select: { requestedAmountKobo: true },
+    }),
+  ]);
+  const salesTrend = new Map<string, { ticketQuantity: number; ticketSubtotalKobo: number }>();
+  for (const order of periodOrders) {
+    if (!order.paidAt) continue;
+    const date = order.paidAt.toISOString().slice(0, 10);
+    const point = salesTrend.get(date) ?? { ticketQuantity: 0, ticketSubtotalKobo: 0 };
+    point.ticketQuantity += order.tickets.length;
+    point.ticketSubtotalKobo += order.ticketSubtotalKobo;
+    salesTrend.set(date, point);
+  }
+  const completedSalesKobo = completedOrders.reduce((total, order) => total + order.ticketSubtotalKobo, 0);
+  const reservedRefundsKobo = refunds.reduce((total, refund) => total + refund.ticketRefundKobo, 0);
+  const reservedPayoutsKobo = payouts.reduce((total, payout) => total + payout.requestedAmountKobo, 0);
+  return {
+    totalEvents,
+    liveEvents,
+    confirmedTickets: periodOrders.reduce((total, order) => total + order.tickets.length, 0),
+    grossTicketSalesKobo: periodOrders.reduce((total, order) => total + order.ticketSubtotalKobo, 0),
+    upcomingAttendees,
+    availablePayoutKobo: Math.max(completedSalesKobo - reservedRefundsKobo - reservedPayoutsKobo, 0),
+    salesTrend: [...salesTrend.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([date, values]) => ({ date, ...values })),
+  };
+}
+
 export async function listOrganizerAttendees({
   database,
   organizerProfileId,
