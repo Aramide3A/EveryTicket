@@ -1,0 +1,7 @@
+{
+  "watch": ["src"],
+  "ext": "ts",
+  "ignore": ["src/generated/prisma/**"],
+  "env": { "ALLOW_INSECURE_REDIS": "true" },
+  "exec": "npm run compile && node dist/main.js"
+}

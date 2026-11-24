@@ -7,6 +7,7 @@ type R2ObjectStoreModule = {
     signUrl?: (client: unknown, command: unknown, options: { expiresIn: number }) => Promise<string>;
   }): {
     createPublicImageUploadUrl(input: { eventId: string; contentType: string; contentLength: number }): Promise<{ objectKey: string; uploadUrl: string; publicUrl: string }>;
+    createCarouselImageDownloadUrl(input: { objectKey: string }): Promise<string>;
     putPrivatePdf(input: { objectKey: string; pdf: Uint8Array }): Promise<void>;
     createPrivateDownloadUrl(input: { objectKey: string }): Promise<string>;
     verifyPublicImage(input: { objectKey: string; contentType: string; contentLength: number }): Promise<boolean>;
@@ -59,6 +60,19 @@ describe('R2 object storage boundary', () => {
     await store.putPrivatePdf({ objectKey: 'tickets/ticket-1.pdf', pdf: new Uint8Array([1, 2, 3]) });
     await expect(store.createPrivateDownloadUrl({ objectKey: 'tickets/ticket-1.pdf' })).resolves.toBe('https://private.example.test/tickets/ticket-1.pdf?expires=300');
     expect(commands).toEqual([{ Bucket: 'everythingticket-private', Key: 'tickets/ticket-1.pdf', Body: new Uint8Array([1, 2, 3]), ContentType: 'application/pdf', CacheControl: 'private, no-store' }]);
+  });
+
+  it('signs temporary downloads only for carousel image objects', async () => {
+    const r2 = await loadR2ObjectStore();
+    expect(r2).toBeDefined();
+    if (!r2) throw new Error('R2 object store is unavailable');
+    const store = r2.createR2ObjectStore({
+      config,
+      signUrl: async (_client, command, options) => `https://account.r2.cloudflarestorage.com/${(command as { input: { Key: string } }).input.Key}?expires=${options.expiresIn}`,
+    });
+
+    await expect(store.createCarouselImageDownloadUrl({ objectKey: 'carousel/slide.webp' })).resolves.toBe('https://account.r2.cloudflarestorage.com/carousel/slide.webp?expires=3600');
+    expect(() => store.createCarouselImageDownloadUrl({ objectKey: 'events/event-1/media/cover.webp' })).toThrow('object key');
   });
 
   it('rejects non-images and oversized uploads before creating a signed URL', async () => {

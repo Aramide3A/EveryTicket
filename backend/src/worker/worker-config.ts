@@ -14,7 +14,7 @@ export type WorkerConfig = {
 
 export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
   const redisUrl = required(environment, 'REDIS_URL');
-  validateRedisUrl(redisUrl);
+  validateRedisUrl(redisUrl, environment.ALLOW_INSECURE_REDIS === 'true' && environment.NODE_ENV !== 'production');
   return {
     databaseUrl: required(environment, 'DATABASE_URL'),
     publicAppUrl: httpsUrl(required(environment, 'PUBLIC_APP_URL'), 'PUBLIC_APP_URL'),
@@ -33,7 +33,7 @@ export function readWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig {
   };
 }
 
-function validateRedisUrl(value: string): void {
+function validateRedisUrl(value: string, allowInsecureExternal: boolean): void {
   let url: URL;
   try {
     url = new URL(value);
@@ -43,6 +43,7 @@ function validateRedisUrl(value: string): void {
 
   if (url.protocol === 'rediss:') return;
   if (url.protocol === 'redis:' && (url.hostname === 'railway.internal' || url.hostname.endsWith('.railway.internal'))) return;
+  if (url.protocol === 'redis:' && allowInsecureExternal) return;
   throw new Error('REDIS_URL must use rediss for encrypted external Redis');
 }
 
