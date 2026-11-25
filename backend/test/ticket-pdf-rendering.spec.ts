@@ -1,5 +1,6 @@
 import { inflateSync } from 'node:zlib';
-import { createTicketPdf } from '../src/worker/ticket-document-delivery.js';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { createTicketPdf, ticketCodeFontSize } from '../src/worker/ticket-document-delivery.js';
 
 describe('ticket PDF rendering', () => {
   it('creates an A4 entry pass with the core gate information', async () => {
@@ -33,6 +34,16 @@ describe('ticket PDF rendering', () => {
     ])
       expect(content).toContain(Buffer.from(text).toString('hex').toUpperCase());
   });
+});
+
+it('scales a long ticket code to remain inside the QR panel', async () => {
+  const pdf = await PDFDocument.create();
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const code = '1bae3209-c273-4e18-9813-0579ec7a7f12';
+  const size = ticketCodeFontSize(code, font);
+
+  expect(size).toBeLessThan(18);
+  expect(font.widthOfTextAtSize(code, size)).toBeLessThanOrEqual(236);
 });
 
 function allPdfStreams(pdf: Uint8Array): string {

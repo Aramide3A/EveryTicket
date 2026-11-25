@@ -80,6 +80,11 @@ export function createR2ObjectStore({ config, client, signUrl }: { config: R2Con
       return sign(signingClient, new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }), { expiresIn: 300 });
     },
 
+    createCarouselImageDownloadUrl({ objectKey }: { objectKey: string }): Promise<string> {
+      if (!isCarouselKey(objectKey)) throw new RangeError('carousel object key is invalid');
+      return sign(signingClient, new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }), { expiresIn: 3_600 });
+    },
+
     async verifyPublicImage({ objectKey, contentType, contentLength }: { objectKey: string; contentType: string; contentLength: number }): Promise<boolean> {
       const extension = imageExtensions[contentType];
       if (!extension || !isPublicMediaKey(objectKey) || !objectKey.endsWith(`.${extension}`) || !isValidImageSize(contentLength)) return false;

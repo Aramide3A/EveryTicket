@@ -5,8 +5,10 @@
   "private": true,
   "description": "EverythingTicket NestJS API and worker",
   "scripts": {
-    "build": "prisma generate && tsc -p tsconfig.build.json",
-    "dev": "nodemon --watch src --ext ts --exec \"npm run build && node dist/main.js\"",
+    "build": "npm run prisma:generate && npm run compile",
+    "compile": "tsc -p tsconfig.build.json",
+    "predev": "npm run prisma:generate",
+    "dev": "nodemon",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --runInBand",

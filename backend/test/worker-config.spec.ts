@@ -75,4 +75,24 @@ describe('worker configuration', () => {
 
     expect(workerConfig.readWorkerConfig({ ...environment, REDIS_URL: redisUrl }).redisUrl).toBe(redisUrl);
   });
+
+  it('allows insecure Redis only with an explicit non-production opt-in', async () => {
+    const workerConfig = await loadWorkerConfig();
+    expect(workerConfig).toBeDefined();
+    if (!workerConfig) throw new Error('worker configuration is unavailable');
+    const redisUrl = 'redis://default:password@redis-proxy.example.test:6379';
+
+    expect(workerConfig.readWorkerConfig({
+      ...environment,
+      NODE_ENV: 'development',
+      ALLOW_INSECURE_REDIS: 'true',
+      REDIS_URL: redisUrl,
+    }).redisUrl).toBe(redisUrl);
+    expect(() => workerConfig.readWorkerConfig({
+      ...environment,
+      NODE_ENV: 'production',
+      ALLOW_INSECURE_REDIS: 'true',
+      REDIS_URL: redisUrl,
+    })).toThrow('REDIS_URL must use rediss');
+  });
 });

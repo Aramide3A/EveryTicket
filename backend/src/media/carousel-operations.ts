@@ -13,8 +13,12 @@ export async function requireCarouselAdministrator(database: Pick<PrismaClient, 
   if (!admin) throw new UnauthorizedException('administrator access is unavailable');
 }
 
-export function listPublicCarouselImages(database: PrismaClient) {
-  return database.carouselImage.findMany({ where: { status: 'READY' }, orderBy, select: { id: true, publicUrl: true, altText: true, eyebrow: true, headline: true, copy: true, ctaLabel: true, ctaHref: true } });
+export async function listPublicCarouselImages(database: PrismaClient, createDownloadUrl?: (image: { objectKey: string }) => Promise<string>) {
+  const images = await database.carouselImage.findMany({ where: { status: 'READY' }, orderBy, select: { id: true, objectKey: true, publicUrl: true, altText: true, eyebrow: true, headline: true, copy: true, ctaLabel: true, ctaHref: true } });
+  return Promise.all(images.map(async ({ objectKey, ...image }) => ({
+    ...image,
+    publicUrl: createDownloadUrl ? await createDownloadUrl({ objectKey }) : image.publicUrl,
+  })));
 }
 
 export async function listAdminCarouselImages({ database, adminProfileId }: Context) {

@@ -19,7 +19,14 @@ export class CarouselController {
   @Header('Cache-Control', 'no-store')
   @ApiOperation({ summary: 'List verified carousel images in upload order; no session required' })
   @ApiOkResponse({ schema: { type: 'object', properties: { items: { type: 'array', items: publicItem } } } })
-  async list() { return { items: await withDatabase(listPublicCarouselImages) }; }
+  async list() {
+    const config = readR2Config(process.env);
+    const imageStore = createR2ObjectStore({ config });
+    const createDownloadUrl = new URL(config.publicMediaUrl).hostname.endsWith('.r2.dev')
+      ? (image: { objectKey: string }) => imageStore.createCarouselImageDownloadUrl(image)
+      : undefined;
+    return { items: await withDatabase((database) => listPublicCarouselImages(database, createDownloadUrl)) };
+  }
 }
 
 @ApiTags('Administration')

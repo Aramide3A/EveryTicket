@@ -45,6 +45,18 @@ describe('profile role access', () => {
 
     expect(sessionCreated).toBe(false);
   });
+
+  it('maps Better Auth invalid credentials to a neutral unauthorized response', async () => {
+    const module = await import('../src/admin/admin-sign-in.controller.js');
+    const unexpected = new Error('database unavailable');
+
+    expect(() => module.rethrowInvalidAdministratorCredentials({
+      name: 'APIError',
+      statusCode: 401,
+      body: { code: 'INVALID_EMAIL_OR_PASSWORD' },
+    })).toThrow('Email or password is incorrect.');
+    expect(() => module.rethrowInvalidAdministratorCredentials(unexpected)).toThrow(unexpected);
+  });
 });
 
 describe('organizer registration identity helpers', () => {
