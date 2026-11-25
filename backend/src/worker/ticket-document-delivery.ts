@@ -138,7 +138,7 @@ export async function createTicketPdf({
   const qr = await pdf.embedPng(await QRCode.toDataURL(credential, { errorCorrectionLevel: 'M', margin: 1, width: 240 }));
   page.drawImage(qr, { x: 100, y: 222, width: 130, height: 130 });
   drawLabel(page, regular, 'TICKET CODE', 254, 326, muted);
-  page.drawText(id, { x: 254, y: 305, size: 18, font: regular, color: violet });
+  page.drawText(id, { x: 254, y: 305, size: ticketCodeFontSize(id, regular), font: regular, color: violet });
   page.drawText('Present this cryptographic QR code at the venue gate.', { x: 254, y: 279, size: 9, font: regular, color: muted });
   page.drawText('Scanned in real time with the organizer camera scanner.', { x: 254, y: 264, size: 9, font: regular, color: muted });
   page.drawText('Valid for ONE entry only. Duplicates will be rejected.', { x: 254, y: 249, size: 9, font: regular, color: muted });
@@ -154,6 +154,10 @@ function drawLabel(page: import('pdf-lib').PDFPage, font: import('pdf-lib').PDFF
 
 function fitSize(text: string, font: import('pdf-lib').PDFFont, size: number, width: number): number {
   return font.widthOfTextAtSize(text, size) <= width ? size : Math.max(8, (width / font.widthOfTextAtSize(text, size)) * size);
+}
+
+export function ticketCodeFontSize(ticketCode: string, font: import('pdf-lib').PDFFont): number {
+  return fitSize(ticketCode, font, 18, 235);
 }
 
 function fitText(text: string, font: import('pdf-lib').PDFFont, size: number, width: number): string {
